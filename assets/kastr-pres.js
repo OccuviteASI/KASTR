@@ -605,17 +605,30 @@
 
   // ---- the presenter (authority) ------------------------------------------------------------------------------------
   let mine = null;
+  // 0.21.95 (Kenton: "I started a presentation and after I closed the presentation it still shows that I'm presenting"): a
+  // deck being opened / prepared here (the presenter view's "Preparing…", which runs long when PowerPoint exports the deck).
+  // End (or Escape / Hide is NOT an end) during that time used to close the view only -- the start went on behind it and the
+  // presentation came up anyway, its share tile saying "You're presenting". End now cancels the start: prepTok.cancel.
+  let prepTok = null;
+  const prepGone = (tok) => !!tok && (tok.cancel || prepTok !== tok);
   async function startFromFile(file) {
     const opts = arguments[1];   // 0.21.92: a meeting template's start (tplPreset) -- startFromFile(file, opts)
     if (!subtle) { toast("Presentations need a secure page (https or this computer's KASTR).", 6000, "warn"); return; }
     if (mine) { toast("You are already presenting " + mine.name + " — end it first.", 5000, "warn"); return; }
+    if (prepTok && !prepTok.cancel) { toast("A presentation is still being prepared — End it first.", 5000, "warn"); return; }   // 0.21.95: never two starts at once
     const c = ctx();
     if (!c || !c.joined) { toast("Join a room first, then share a presentation.", 5000, "warn"); return; }
+    const tok = prepTok = { cancel: false, at: Date.now() };
+    try { return await startPrepared(file, opts, c, tok); }
+    finally { if (prepTok === tok) prepTok = null; }
+  }
+  async function startPrepared(file, opts, c, tok) {
     const t0 = performance.now();
     view.open({ preparing: "Opening " + (file.name || "the deck") + "…" });
     let src;
-    try { src = await openSource(file, (msg) => view.prep(msg)); }
-    catch (e) { view.close(); toast(String(e.message || e), 8000, "warn"); return; }
+    try { src = await openSource(file, (msg) => { if (!prepGone(tok)) view.prep(msg); }); }
+    catch (e) { if (prepGone(tok)) return; view.close(); toast(String(e.message || e), 8000, "warn"); return; }
+    if (prepGone(tok)) { try { src.close(); } catch {} T("start-cancelled", { at: "open" }); return; }   // 0.21.95: End while it opened
     if (!src.n) { view.close(); toast("That deck has no slides to show.", 5000, "warn"); return; }
     const base = relayBase();
     let deck;
@@ -623,14 +636,21 @@
       const r = await fetch(base + "/api/pres/new", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ room: c.channel, name: src.name, n: src.n }) });
       deck = await r.json();
       if (!r.ok || !deck.id) throw new Error(deck.error || r.status);
-    } catch (e) { src.close(); view.close(); toast("The relay host cannot hold the slides: " + (e.message || e), 7000, "warn"); return; }
+    } catch (e) { src.close(); if (prepGone(tok)) return; view.close(); toast("The relay host cannot hold the slides: " + (e.message || e), 7000, "warn"); return; }
+    const forget = () => {   // 0.21.95: cancelled after the store made the deck -- the store forgets it again
+      try { src.close(); } catch {}
+      try { navigator.sendBeacon(base + "/api/pres/" + deck.id + "/end?token=" + deck.token, new Blob([])); } catch {}
+    };
+    if (prepGone(tok)) { forget(); T("start-cancelled", { at: "new" }); return; }
     const K = crypto.getRandomValues(new Uint8Array(32));
     const keys = await Promise.all(Array.from({ length: src.n }, (_, i) => hkdf(K, "slide/" + i)));
     const me = await myKeys();
     const rtEnc = deck.rtoken ? b64(await seal(await hkdf(K, "read"), enc.encode(deck.rtoken))) : "";
+    const notesKey = await hkdf(K, "notes");
+    if (prepGone(tok) || mine) { forget(); T("start-cancelled", { at: "keys" }); return; }
     mine = {
       id: deck.id, token: deck.token, rtEnc, liveIdx: 0, liveChain: Promise.resolve(), via: src.via || src.kind, base, room: c.channel, name: src.name, kind: src.kind, n: src.n, ar: src.ar, src, K, keys,
-      notesKey: await hkdf(K, "notes"), notes: src.notes.slice(), nv: 1,
+      notesKey, notes: src.notes.slice(), nv: 1,
       blobs: new Array(src.n).fill(null), up: new Array(src.n).fill(false), busy: [], rendering: null, want: [],
       idx: 0, ver: 1, by: myPerson(), blank: null, t0: Date.now(), bs: new Map(), lastSeq: new Map(), share: null, pk: me.pub,
       warnings: src.warnings || [], startedMs: 0, pubSeq: 0, told: 0, vids: new Map(),   // 0.21.87: + the videos playing on the live slide
@@ -644,8 +664,11 @@
     askPreset(mine, arguments[1]);   // 0.21.91: a meeting template's audience.ask (startFromFile(file, opts): opts.ask === 0 -> off)
     audPreset(mine, arguments[1]);   // 0.21.92: + opts.see === 0 ("Audience can see each other" off), opts.am === 0 (audience may talk)
     view.prep("Preparing slide 1 of " + mine.n + "…");
-    try { await ensureSlide(mine.idx); if (mine.idx) await postLive(mine, mine.idx); } catch (e) { endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
+    const m0 = mine;
+    try { await ensureSlide(m0.idx); if (m0.idx && mine === m0) await postLive(m0, m0.idx); } catch (e) { if (mine !== m0 || prepGone(tok)) { if (mine === m0) endMine("ended"); return; } endMine("prep failed"); toast("Could not prepare the first slide: " + (e.message || e), 7000, "warn"); return; }
+    if (mine !== m0 || prepGone(tok)) { if (mine === m0) endMine("ended"); T("start-cancelled", { at: "slide" }); return; }   // 0.21.95: End while slide 1 was made
     await uploadNotes();
+    if (mine !== m0 || prepGone(tok)) { if (mine === m0) endMine("ended"); T("start-cancelled", { at: "notes" }); return; }
     startShare();
     mine.startedMs = Math.round(performance.now() - t0);
     publish();
@@ -1089,6 +1112,27 @@
     for (const k of [...stillCache.keys()]) if (k.startsWith(m.id + "/")) stillCache.delete(k);
     T(keep ? "release" : "end", { id: m.id, why });
     view.paint();
+    // 0.21.95: the presenter view never stays open on a deck that is gone (its share stopped, the room left, End while preparing)
+    try { if (!keep && view.isOpen() && !view.deck()) view.close(); } catch {}
+    presSweep();   // 0.21.95: and nothing of it stays on this page
+  }
+  // 0.21.95: the safety net (the page's window.__presShare.sweep): no presentation share, slide video or tile of mine outlives the
+  // deck that made it. A running deck keeps its share and its videos (a video still starting is left alone); while a deck is being
+  // prepared only orphan tiles go.
+  function presSweep() {
+    const sw = window.__presShare && window.__presShare.sweep;
+    if (typeof sw !== "function") return 0;
+    try {
+      if (!mine && prepTok && !prepTok.cancel) return sw({ panesOnly: true });
+      const keep = [];
+      if (mine) {
+        if (mine.share && mine.share.id != null) keep.push(mine.share.id);
+        for (const e of mine.vids.values()) if (e.shareId != null) keep.push(e.shareId);
+      }
+      const n = sw({ keep, vids: !mine });
+      if (n) T("sweep", { n, running: !!mine });
+      return n;
+    } catch (e) { console.warn("KASTR pres: sweep", e); return 0; }
   }
   // 0.21.91: a co-presenter who can run the deck on (holds K + the write token, is here, can co-present)
   const coReady = (m) => !!m && m.ps.some((x) => x.p !== myPerson() && x.w && x.t && hereNow(x.p) && canCo(x.p));
@@ -1890,7 +1934,12 @@
     }
     function endNow() {
       const v = deck();
-      if (v && v.role === "presenter" && mine) endMine("ended");
+      // 0.21.95: End during "Preparing…" (no deck on show yet -- deckId is null) cancels the start, and ends a deck that came
+      // up meanwhile: before, End only closed the view and the presentation started behind it ("still shows I'm presenting").
+      if (prepTok) prepTok.cancel = true;
+      if (mine && (!v || (v.role === "presenter" && v.id === mine.id))) { endMine("ended"); close(); return; }
+      if (!v) { close(); return; }
+      if (v.role === "presenter" && mine) endMine("ended");
       else if (v && v.role === "copresenter") {
         const bk = backstage.get(v.id), id = v.id;
         sendPresOp(id, { op: "end" });
@@ -3466,6 +3515,7 @@
     try { syncOverlays(); } catch (e) { console.warn("KASTR pres", e); }
     try { view.paint(); } catch {}
   }
+  let sweepTick = 0;
   setInterval(() => {
     try { syncOverlays(); } catch {}
     try { if (mine) rewrap(); } catch {}
@@ -3475,6 +3525,7 @@
       else if (mine.share && mine.share.id != null && window.__presShare && window.__presShare.alive && !window.__presShare.alive(mine.share.id)) { endMine("share stopped"); toast("The presentation ended (its share was stopped).", 5000); }
     }
     try { ownership(); } catch (e) { console.warn("KASTR pres: hand-over", e); }
+    if (++sweepTick % 4 === 0) presSweep();   // 0.21.95: about every 3 s
   }, 700);
   // ---- 0.21.91: the OWNER role passes on ----------------------------------------------------------------------------------------
   // Kenton: "Work out ... what happens to the deck if the MAIN presenter leaves or drops while added presenters remain." The deck is

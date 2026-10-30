@@ -32470,6 +32470,15 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function stopSlot(id) {
     const slot = slots.get(id);
     if (!slot) return;
+    // 0.21.95: the pane and the slot ALWAYS go, even when a teardown step throws -- a throw here used to leave the tile on the
+    // stage (and its row in Share) with nothing behind it
+    try { stopSlotParts(slot); } catch (e) { console.warn("KASTR stopSlot", e); }
+    try { slot.pane.remove(); } catch {}
+    slots.delete(id);
+    updateRtspGrid();   // grid membership follows the slot set (0.8.3)
+    stageEl.classList.toggle("multi", slots.size > 1);
+  }
+  function stopSlotParts(slot) {
     // 0.8.0: own-pane audio extras die with the slot.
     if (slot.audioPoll) { clearInterval(slot.audioPoll); slot.audioPoll = null; }
     try { slot.healthUnsub?.(); } catch {}   // 0.8.6
@@ -32503,10 +32512,6 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       slot.displayStream = null;
       if (slot.pres) stopPresenter(slot);   // 0.21.20
     }
-    slot.pane.remove();
-    slots.delete(id);
-    updateRtspGrid();   // grid membership follows the slot set (0.8.3)
-    stageEl.classList.toggle("multi", slots.size > 1);
   }
 
   function bindSlotDevice(slot) {
@@ -33530,6 +33535,28 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     path(id) { return slots.get(id)?.publish?.getAttribute("name") || ""; },
     alive(id) { return added.some((a) => a.id === id); },   // the source row is there (a slot restarting for a moment still counts)
     stop(id) { if (added.some((a) => a.id === id)) removeSource(id); },
+    // 0.21.95 (Kenton: "after I closed the presentation it still shows that I'm presenting"): the safety net. kastr-pres.js calls
+    // this when a deck ends and every few seconds: o.keep = the source ids its running deck still uses (none when no deck runs
+    // here). Every other presentation share (presCanvas) goes, and -- unless o.vids === false (a deck runs: a slide video may be
+    // on its way in) -- every slide video / sound (presVideo); o.panesOnly (a deck is being prepared) touches no source. Then any
+    // tile of mine (.pubpane) that no live slot owns is removed: a tile with nothing behind it ("You're presenting", black).
+    sweep(o) {
+      const keep = new Set((o && o.keep) || []);
+      let n = 0;
+      if (!(o && o.panesOnly)) {
+        for (const a of [...added]) {
+          if (keep.has(a.id)) continue;
+          if (a.presCanvas || (a.presVideo && !(o && o.vids === false))) {
+            try { removeSource(a.id); } catch (e) { console.warn("KASTR pres sweep", e); }
+            n++;
+          }
+        }
+      }
+      const owned = new Set([...slots.values()].map((s2) => s2.pane));
+      for (const p of document.querySelectorAll(".pubpane:not(.dgclone)")) if (!owned.has(p)) { p.remove(); n++; }
+      if (n) log("Presentation: cleared " + n + " leftover share" + (n === 1 ? "" : "s") + " / tile" + (n === 1 ? "" : "s") + ".");
+      return n;
+    },
   };
   // 0.21.87 (Kenton: "This powerpoint has a video in it ... I need that to be able to function inside of KASTR"; decided "Play it
   // on the slide"): while a slide with an embedded video is live, kastr-pres.js streams that video into the room exactly like
@@ -33758,8 +33785,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const track = restampCaptureTrack(slot.entry.presCanvas.captureStream(fps).getVideoTracks()[0], fps);
     slot.presTrack = track;
     // the publish element builds its capture after it connects (the browser's picker hid that delay from captureDisplay)
-    for (let i = 0; i < 80 && !pubCap(slot.publish)?.in?.source && slots.has(slot.entry.id); i++) await new Promise((r) => setTimeout(r, 100));
-    if (!slots.has(slot.entry.id)) { try { track.stop(); } catch {} return; }
+    for (let i = 0; i < 80 && !pubCap(slot.publish)?.in?.source && slots.get(slot.entry.id) === slot; i++) await new Promise((r) => setTimeout(r, 100));
+    if (slots.get(slot.entry.id) !== slot || !slot.pane.isConnected) { try { track.stop(); } catch {} return; }   // 0.21.95: this slot, not a rebuilt one with its id
     displayAttach(slot, new MediaStream([track]));
     const id = slot.entry.id;
     const assert = setInterval(() => {   // the element resets its sources while it starts up -- keep the slide canvas in place

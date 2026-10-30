@@ -907,7 +907,9 @@ class Page(unittest.TestCase):
         # the template's start applies BEFORE the first publish (the room never sees slide 1 first)
         i_pre, i_pub = pres.index("tplPreset(mine, file, opts);"), pres.index("mine.startedMs = Math.round(performance.now() - t0);\n    publish();")
         self.assertLess(i_pre, i_pub)
-        self.assertIn("await ensureSlide(mine.idx); if (mine.idx) await postLive(mine, mine.idx);", pres)
+        # 0.21.95: the same step, on the deck the start made (m0) -- End during the preparation cancels it (test_release_0_21_95_pres_end)
+        self.assertIn("await ensureSlide(m0.idx); if (m0.idx && mine === m0) await postLive(m0, m0.idx);", pres)
+        self.assertLess(pres.index("await ensureSlide(m0.idx);"), i_pub)
         self.assertIn("    tplSnap,   // 0.21.92", pres)
         # 0.21.91's audience switches: Save takes Ask to speak from audSnap, Start sets it before the first publish
         self.assertIn("const aud = window.__pres.audSnap() ||", pres)

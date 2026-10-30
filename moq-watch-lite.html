@@ -965,6 +965,7 @@
   .pubui .camrow.parked .start:disabled { opacity:.55; cursor:default; }
   .pubui .camrow.parked .pknote { font-size:11px; line-height:1.35; color:var(--text-mute); overflow-wrap:anywhere; }
   #mineMenu .mi .misw { margin-left:auto; flex:none; pointer-events:none; }
+  #kPtBar .tog .misw { pointer-events:none; margin-right:6px; vertical-align:middle; }   /* 0.21.96: the pointer bar's on/off buttons wear a switch */
   /* 0.7.8: transient notice chip (RTSP failures etc.) */
   /* 0.21.0: a toast is neutral; the level shows as an accent. Red is for errors ONLY (field: "all alerts come in red"). */
   #kToast { position:fixed; top:54px; left:50%; transform:translate(-50%, -8px); z-index:90;
@@ -7742,9 +7743,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         row.appendChild(c);
       }
       const all = document.createElement("button"); all.type = "button"; all.className = "tog" + (m.everyone ? " on" : ""); all.dataset.act = "all"; all.dataset.share = m.share;
-      all.textContent = (m.everyone ? "\u2611 " : "\u2610 ") + "Let everyone point"; all.title = "Everyone watching gets a pointer without asking";
+      const ptSw = (on) => { const l = document.createElement("label"); l.className = "switch sm misw"; const i = document.createElement("input"); i.type = "checkbox"; i.checked = !!on; i.tabIndex = -1; i.setAttribute("aria-hidden", "true"); l.append(i, document.createElement("i")); return l; };   // 0.21.96: switches, not tick glyphs
+      all.append(ptSw(m.everyone), "Let everyone point"); all.setAttribute("aria-pressed", String(!!m.everyone)); all.title = "Everyone watching gets a pointer without asking";
       const own = document.createElement("button"); own.type = "button"; own.className = "tog" + (m.own ? " on" : ""); own.dataset.act = "own"; own.dataset.share = m.share;
-      own.textContent = (m.own ? "\u2611 " : "\u2610 ") + "Show my clicks"; own.title = "Your own clicks show as ripples for everyone watching";
+      own.append(ptSw(m.own), "Show my clicks"); own.setAttribute("aria-pressed", String(!!m.own)); own.title = "Your own clicks show as ripples for everyone watching";
       const off = document.createElement("button"); off.type = "button"; off.className = "stop"; off.dataset.act = "off"; off.dataset.share = m.share; off.textContent = "Stop pointers";
       row.append(all, own, off);
       el.appendChild(row);
@@ -7765,8 +7767,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function ptShareItems(share) {   // the share's own menu (my tile's chevron)
     if (!rcCaps?.point || !ptMineOf(share)) return [];
     const m = ptMine.get(share);
-    const out = [{ value: "pnteveryone", icon: "mouse", label: (m?.everyone ? "\u2611 " : "\u2610 ") + "Let everyone point", tip: "Everyone watching gets a pointer with their name; a click shows as a ripple \u2014 nobody can click or type on your computer" },
-                 { value: "pntown", label: (ptOwnPref() ? "\u2611 " : "\u2610 ") + "Show my clicks", tip: "Your own clicks show as ripples for everyone watching (while pointers are on)" }];
+    const out = [{ value: "pnteveryone", icon: "mouse", sw: !!(m?.everyone), label: "Let everyone point", tip: "Everyone watching gets a pointer with their name; a click shows as a ripple \u2014 nobody can click or type on your computer" },
+                 { value: "pntown", sw: !!(ptOwnPref()), label: "Show my clicks", tip: "Your own clicks show as ripples for everyone watching (while pointers are on)" }];
     if (m) {
       const people = new Map();
       for (const [k, a] of m.allowed) people.set(k, a.name);
@@ -14224,7 +14226,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                     tip: sp ? "Its own tile goes again for everyone in " + roomTitle(CHANNEL) : "A tile of its own for everyone in " + roomTitle(CHANNEL) + " (pin or spotlight it); the grid keeps its cell; other rooms are untouched" });
                 }
                 const on = vgHq(name).has(vgKey(mp));
-                items.push({ value: "vghq", label: (on ? "\u2611 " : "\u2610 ") + "Full quality in the grid: " + String(gm.cells?.[idx] || "this camera").slice(0, 24), tip: "This cell shows the camera's own stream on your screen (up to 4 per grid)" });
+                items.push({ value: "vghq", sw: !!(on), label: "Full quality in the grid: " + String(gm.cells?.[idx] || "this camera").slice(0, 24), tip: "This cell shows the camera's own stream on your screen (up to 4 per grid)" });
               }
             }
           } catch {}
@@ -15560,7 +15562,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       items.push({ value: "gf-both", label: (gf === "both" ? "\u25c9 " : "\u25cb ") + "Grid + full-quality feeds" });
       items.push({ value: "gf-grid", label: (gf === "grid" ? "\u25c9 " : "\u25cb ") + "Grid only (one stream)" });
       items.push({ value: "gf-separate", label: (gf === "separate" ? "\u25c9 " : "\u25cb ") + "Separate feeds (no grid)" });
-      items.push({ value: "lock", label: (window.__gridFeeds?.lock?.() ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
+      items.push({ value: "lock", sw: !!(window.__gridFeeds?.lock?.()), label: "Lock cells (a dropped feed keeps its place)" });
     }
     if (ref.kind === "rtsp" && ref.id > -100 && !src?.share) {   // 0.15.0: grid composites are ids -100, -101, ...
       items.push({ value: "ghost", label: window.__ghost?.get?.(ref.id)
@@ -15576,7 +15578,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (CHANNEL !== LOBBY && !publishOnly) items.push({ value: "xshare", label: "Show in other rooms\u2026" });   // 0.21.41; 0.21.62: always, my camera too
     if (CHANNEL !== LOBBY && !publishOnly && ref.peer === window.__publisher?.peer) {   // 0.21.85: LISTED in the stream library (it stays in this room)
       const ls = window.__libShares?.get?.(CHANNEL + "/" + hangName(ref.name));
-      if (ls && !(ls.why && !ls.want)) items.push({ value: "libsh", label: (ls.want ? "\u2611 " : "\u2610 ") + "In the stream library" });   // (not where it cannot be listed)
+      if (ls && !(ls.why && !ls.want)) items.push({ value: "libsh", sw: !!(ls.want), label: "In the stream library" });   // (not where it cannot be listed)
     }
     if (boardCan()) {   // 0.21.63: the room board -- my share stays listed here (it shows whenever it is on the air)
       const rp = boardPinned(CHANNEL + "/" + hangName(ref.name));
@@ -32584,8 +32586,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       items.push({ sep: true }, { cap: "Publish feeds as" });
       for (const [id, label] of GRID_FEEDS) items.push({ value: "feeds:" + id, label, on: gridFeeds === id });
       items.push({ sep: true });
-      items.push({ value: "lock", label: (gridLock ? "\u2611 " : "\u2610 ") + "Lock cells (a dropped feed keeps its place)" });
-      items.push({ value: "names", label: (gridNames ? "\u2611 " : "\u2610 ") + "Show names on grid cells" });
+      items.push({ value: "lock", sw: !!(gridLock), label: "Lock cells (a dropped feed keeps its place)" });
+      items.push({ value: "names", sw: !!(gridNames), label: "Show names on grid cells" });
       items.push({ sep: true }, { value: "rename", label: "Rename grid\u2026" });
       items.push({ value: "camsoff", label: "Turn off all cameras in this grid" });   // 0.21.36 (Kenton): one switch for the grid's cameras (back on: the grid's switch in Sources)
       const gLit = window.__spotIs?.(chanPath(ensureHang(g.entry.name)));   // 0.21.30: already spotlit -> offer to remove it

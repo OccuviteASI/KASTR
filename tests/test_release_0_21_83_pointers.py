@@ -675,8 +675,8 @@ class Page(unittest.TestCase):
         self.assertIn('if (String(v).startsWith("pnt")) { ptMenuPick(name, v); return; }   // 0.21.83: pointer mode', p)
         self.assertIn('for (const it of ptShareItems(CHANNEL + "/" + hangName(ref.name))) items.push(it);', p)
         self.assertIn('ptShareMenuPick(CHANNEL + "/" + hangName(ref.name), v);', p)
-        self.assertIn('label: (m?.everyone ? "\\u2611 " : "\\u2610 ") + "Let everyone point"', p)
-        self.assertIn('own.textContent = (m.own ? "\\u2611 " : "\\u2610 ") + "Show my clicks";', p)
+        self.assertIn('sw: !!(m?.everyone), label: "Let everyone point"', p)   # 0.21.96: switches, not tick glyphs
+        self.assertIn('own.append(ptSw(m.own), "Show my clicks");', p)
         self.assertIn('b.innerHTML = icon("mouse") + "<span>Point</span>";', p)
         self.assertIn("#stage .pane.ptable.mainstage .pptbtn { display:inline-flex; }", p)
         self.assertIn('const ptOwnPref = () => { try { return localStorage.getItem("kastr.pt.own") !== "0"; } catch { return true; } };', p)   # my clicks: on by default

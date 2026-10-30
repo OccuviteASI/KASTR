@@ -3896,8 +3896,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // ---- 0.21.96 BOX-OUT (Kenton, 2026-10-30: "For Relays/Camera boxes, I would like them to not be able to directly connect to
   // rooms, they connect to their 'My room' or no room at all, and their shares just go to the library or whatever rooms they tell
   // them to."). This machine's own KASTR says so (/api/instance.boxout, to a local page only -- kastr_serve.boxout_state): a
-  // camera box (mode publisher / publisher-relay) or a machine that runs the relay itself (mode relay, its relay running, relay
-  // autostart on). Such a page joins its hidden home room ("No room") or its own My room and nothing else; every other way into
+  // camera box (mode publisher / publisher-relay) or a machine whose relay is always on (mode relay or relay autostart on --
+  // Kenton: "Only always-on relays"; a relay started by hand does not count). Such a page joins its hidden home room ("No room") or its own My room and nothing else; every other way into
   // a room (the Join room page, the rail, Change room, invite links, person invites, Create room) is refused with one line. The
   // relay's minter refuses the same (the `boxed` flag on authMint) and the box server refuses a real room for its cameras --
   // there is no machine identity before 0.22, so this is the page's and its own KASTR's rule, not a wall.
@@ -4746,6 +4746,29 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // connection, room adds, the builder's Library group) is at the end of this module, "THE STREAM LIBRARY".
   const LIB_ROOT = "lib";   // the reserved root: library streams publish at lib/<host>/<op>/<leaf>.hang, outside every room
   const isLibPath = (p) => String(p || "").startsWith(LIB_ROOT + "/");
+  // 0.21.96 (Kenton: "Swap in place"): a box that updated out of a real room comes back as a LIBRARY stream -- the same
+  // <host>/<op>/<leaf> under lib/ instead of under the room (the relay's lib_alias_ok rule). Its old tile's place, its spotlight
+  // and its arrange slot follow the new path on this page (tileSwapIn; akaOf in spotSetNow / spotOrdered).
+  const tileAka = new Map();    // old path -> the library path whose tile took its place here
+  const tileLeft = new Map();   // path -> { at, sel, ord } -- a tile that went lately (an update's gap: the camera comes back soon)
+  const TILE_LEFT_MS = 300000;
+  let libAkaMap = new Map();    // the catalogue's aka (old path -> lib path), kept by libAkaTake
+  let selectAt = 0;             // the last pick by hand (select)
+  function libTwinPath(p) {       // the library path a box camera's old room path becomes, or ""
+    p = String(p || "");
+    if (!p.endsWith(".hang") || isLibPath(p) || p.startsWith("~")) return "";
+    const a = libAkaMap.get(p);
+    if (a) return a;
+    const parts = p.split("/");
+    return parts.length >= 4 && parts.every(Boolean) ? LIB_ROOT + "/" + parts.slice(1).join("/") : "";
+  }
+  function akaOf(p) {           // what this page shows for a path: itself while its tile is here, else its library twin's tile
+    p = String(p);
+    if (tiles.has(p)) return p;
+    if (isLibPath(p)) { const o = CHANNEL + p.slice(LIB_ROOT.length); return tiles.has(o) ? o : p; }   // a vote already moved to the library path (the hub follows the alias): the old tile holds the place until the library tile comes
+    const l = tileAka.get(p) || libTwinPath(p);
+    return l && tiles.has(l) ? l : p;
+  }
   const libTiles = new Map();   // lib path -> { why: "pin" | "me" | "grid" } -- a library stream with a tile in this room
   const libCat = new Map();     // lib path -> its catalogue entry (libNorm)
   const libAsked = new Set();   // paths a catalogue answer covered (an absent one is "No longer in the library")
@@ -13749,6 +13772,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (!tiles.has(name) || roomHid.has(name)) return;   // 0.21.64: a camera the room removed is never opened here
     manualPick = true;   // 0.13.3
     galleryChosen = false;   // 0.21.40
+    selectAt = Date.now();   // 0.21.96: swap in place gives a gone tile's pick back only when nothing was picked since
     if (name !== selectedName) viewResetAll();   // 0.8.12: a new pick starts unzoomed
     selfSpotEl = null;         // a remote pick replaces a self-spotlight
     selectedName = name;
@@ -14182,6 +14206,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   function createTile(name) {
     if (isPublisherMode()) return;   // 0.13.0 (F2): a publisher box watches nobody -- no tile, no subscription, whatever asked
+    { const l = tileAka.get(String(name)); if (l && tiles.has(l)) return; }   // 0.21.96: swapped in place -- its library twin is the tile
     if (switchNow && String(name).startsWith(switchNow.to + "/")) { try { switchMark("firstTile"); } catch {} }   // 0.21.70
     if (!isCgName(name)) personChime(name, true);   // 0.8.2: join chime (person-keyed, debounced); 0.21.66: a grid of cameras is nobody
     const gm0 = gridMeta.get(name);
@@ -14612,6 +14637,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 
     if (selectedName === undefined && !roomHid.has(name) && !cgHide(name) && isWatched(name) && !isGridChild(name) && !wrRoomOf(name)) selectedName = name;   // 0.9.4: never a hidden child (0.21.44: nor a watched room's)
     if (isPinned(name) && !manualPick && !galleryChosen) setTimeout(() => { if (tiles.has(name) && !manualPick && !galleryChosen) pinsShow(); }, 0);   // 0.21.45: a pin came back
+    if (isLibPath(name)) { try { tileSwapIn(name); } catch (e) { console.warn("KASTR: swap in place", e); } }   // 0.21.96 (Kenton: "Swap in place")
     renumber();
     spotApplyWinner();   // 0.21.0: a standing vote for this (re-created) tile applies now
     gridWakeCheck(name);   // 0.21.2: a quadrant asked for this feed
@@ -14623,6 +14649,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function removeTile(name) {
     const t = tiles.get(name);
     if (!t) return;
+    if (!tileAka.has(name) && !isLibPath(name)) tileLeft.set(name, { at: Date.now(), sel: selectedName === name, ord: manualOrder.indexOf(name) });   // 0.21.96: swap in place
     t.unsubMeter?.();
     try { t.meterRoot?.disconnect(t.analyser); } catch {}
     t.pane.remove(); // disconnects <moq-watch>, stops its connection
@@ -14684,6 +14711,45 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }, ms);
     pendingRemovals.set(name, id);
   }
+
+  // 0.21.96 (Kenton: "Swap in place"): a library tile that is the old room path's twin takes that tile's place AT ONCE -- the old
+  // tile goes now (no duplicate, none left "waiting for keyframe"), and what named the old path follows: my pick, my row order,
+  // my pins / grids / watch memory (libAkaRewrite). Spotlights (anyone's votes, the room board's) and the arrange order follow by
+  // akaOf in spotSetNow / spotOrdered, so the spotlight stays on the camera. A tile that already went in the update's gap
+  // (tileLeft) is followed the same way.
+  function tileSwapIn(lib) {
+    if (!isLibPath(lib) || !tiles.has(lib)) return 0;
+    const now = Date.now();
+    for (const [k, v] of [...tileLeft]) if (now - v.at > TILE_LEFT_MS) tileLeft.delete(k);
+    const olds = new Set();
+    // a LIVE old tile is swapped only when it is this camera moved out: its library path is LISTED into this room (Show in rooms
+    // -- a share of this room is never listed back into it) or the catalogue names the old path as its alias. A person's share
+    // of this room that is also in the library keeps its own tile.
+    for (const k of tiles.keys()) if (k !== lib && libTwinPath(k) === lib && (xsTiles.has(lib) || libAkaMap.get(k) === lib)) olds.add(k);
+    for (const k of tileLeft.keys()) if (!tileAka.has(k) && libTwinPath(k) === lib) olds.add(k);
+    if (!olds.size) return 0;
+    let parked = false;
+    for (const o of olds) {
+      tileAka.set(o, lib);
+      const left = tileLeft.get(o);
+      tileLeft.delete(o);
+      const oi = manualOrder.indexOf(o);
+      const at = oi >= 0 ? oi : (left ? left.ord : -1);
+      if (at >= 0) { manualOrder = manualOrder.filter((n) => n !== lib && n !== o); manualOrder.splice(Math.min(at, manualOrder.length), 0, lib); }
+      if (selectedName === o || (left?.sel && selectAt < left.at)) selectedName = lib;
+      if (gridZoom?.name === o) gridZoom = null;
+      if (parkedStreams.has(o) && !enabledStreams.has(o)) parked = true;
+      if (tiles.has(o)) { cancelPendingRemoval(o); removeTile(o); }   // at once: never a second tile waiting for a keyframe
+      enabledStreams.delete(o); parkedStreams.delete(o);   // its watch memory is the library path's now (libAkaRewrite below)
+      console.log("switcher: \"" + o + "\" came back from the library as \"" + lib + "\" -- swapped in place");
+    }
+    if (parked) { enabledStreams.delete(lib); parkedStreams.add(lib); saveEnabled(); saveParked(); }   // I had it parked: it stays parked
+    try { localStorage.setItem(ORDER_KEY, JSON.stringify(manualOrder.filter((n) => tiles.has(n)))); } catch {}
+    try { libAkaRewrite(new Map([...olds].map((o) => [o, lib]))); } catch (e) { console.warn("KASTR: swap in place (local references)", e); }
+    spotDone = null;
+    return olds.size;
+  }
+  window.__tileSwap = { aka: () => Object.fromEntries(tileAka), left: () => [...tileLeft.keys()], akaOf: (k) => akaOf(k), twin: (k) => libTwinPath(k) };   // rig
 
   function cancelPendingRemoval(name) {
     const id = pendingRemovals.get(name);
@@ -15536,11 +15602,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!v || !v.target) return;
       const ts = Number(v.ts) || 0;
       if (v.target === "~none") { if (ts > noneAt) noneAt = ts; return; }
+      const was = String(v.target), tg = akaOf(was);   // 0.21.96 (Kenton: "Swap in place"): a box camera's old room path -> its library tile
+      v = tg === was ? v : { ...v, target: tg, was };
       if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target)) && !libTiles.has(String(v.target))) return;   // 0.21.47 (Kenton): a spotlight stays in its room
       // 0.21.95 (Kenton: "when I spotlight multiple things, only 1 stays on stage"): a library stream added to this room (lib/...) is
       // this room's too -- its spotlight was dropped here, so a mosaic never formed and only the tile I clicked stayed
       const c = add.get(v.target);
-      if (!c || ts > c.ts) add.set(String(v.target), { target: String(v.target), ts, by });
+      if (!c || ts > c.ts) add.set(String(v.target), v.was ? { target: String(v.target), ts, by, was: v.was } : { target: String(v.target), ts, by });
     };
     // 0.21.65 (m): a locked view counts the BOARD's spotlights only (the creator's / an admin's own votes too: they also go to
     // the board) -- a member's vote, the share owner's mirror and the legacy announce are ignored
@@ -15549,7 +15617,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     let mine = [];
     try { if (!vl || vb) mine = window.__spot?.mineList?.() || []; } catch {}
     for (const v of mine) addV(v, "me");
-    const offV = (o) => { if (o && o.target) off.set(String(o.target), Math.max(off.get(String(o.target)) || 0, Number(o.ts) || 0)); };
+    const offV = (o) => { if (o && o.target) { const t = akaOf(String(o.target)); off.set(t, Math.max(off.get(t) || 0, Number(o.ts) || 0)); } };   // 0.21.96: + akaOf
     if (!vl) for (const arr of spotOffs.values()) for (const o of arr) offV(o);
     let mineOff = [];
     try { if (!vl || vb) mineOff = window.__spot?.mineOffs?.() || []; } catch {}
@@ -15566,7 +15634,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function spotOrdered(list) {
     const ord = spotOrderNow();
     if (!ord.length) return list;
-    const rank = new Map(ord.map((t, i) => [String(t), i]));
+    const rank = new Map();
+    ord.forEach((t, i) => { const k = akaOf(String(t)); if (!rank.has(k)) rank.set(k, i); });   // 0.21.96: an old path's slot is its library twin's
     return [...list.filter((v) => rank.has(v.target)).sort((a, b) => rank.get(a.target) - rank.get(b.target)), ...list.filter((v) => !rank.has(v.target))];
   }
   const spotOnRoom = (name) => spotSetNow().some((v) => v.target === String(name) || gridOwnerOf(v.target) === String(name));   // 0.21.65: a split camera's spotlight is its own
@@ -15575,8 +15644,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // 0.21.32: remove ONE thing from the spotlight (for everyone); no target = everything
   window.__spotRemove = (target) => {
     const all = spotSetNow();
-    const list = target != null ? all.filter((v) => v.target === String(target) || gridOwnerOf(v.target) === String(target)).map((v) => v.target)
-      : all.map((v) => v.target);
+    const pick = target != null ? all.filter((v) => v.target === String(target) || gridOwnerOf(v.target) === String(target)) : all;
+    const list = [...new Set(pick.flatMap((v) => (v.was ? [v.target, v.was] : [v.target])))];   // 0.21.96: + the old path a swapped one was voted as
     if (target != null && !list.length) list.push(String(target));
     for (const t of list) { try { window.__spot?.off?.(t); } catch {} spotLitClear(true, t); }
     spotApplyWinner();
@@ -15627,7 +15696,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     spotDone = sig;
     // 0.21.40: only a new spotlight (or a removed one) is news. A tile that comes or goes changes what this page can show,
     // not what the room chose -- a person who chose the gallery stays in it.
-    const votes = set.map((v) => v.target + "@" + v.ts).sort().join("|");   // 0.21.66: the order is no news
+    const votes = set.map((v) => (v.was || v.target) + "@" + v.ts).sort().join("|");   // 0.21.66: the order is no news; 0.21.96: nor a swap in place
     const news = votes !== spotVotesDone;
     spotVotesDone = votes;
     if (pinsLive().length) { spotStage = items.length >= 2 ? items : []; return; }   // 0.21.45: my pins win (the spotlight waits)
@@ -25127,7 +25196,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function libAkaTake() {
     const map = new Map();
     for (const e of libCat.values()) for (const a of e.aka) if (a !== e.path) map.set(a, e.path);
+    libAkaMap = map;   // 0.21.96: swap in place reads it
     if (!map.size) return;
+    { let n = 0; for (const k of [...tiles.keys()]) if (isLibPath(k)) n += tileSwapIn(k); if (n) { spotApplyWinner(); applyState(); } }   // 0.21.96: an alias learned after the library tile came
     const sig = [...map].map(([a, b]) => a + ">" + b).sort().join("|");
     if (sig === libAkaSig) return;
     libAkaSig = sig;
@@ -25157,9 +25228,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     });
     edit("kastr.libme." + rel, (o) => { if (o && typeof o === "object") for (const k of Object.keys(o)) if (Array.isArray(o[k])) o[k] = o[k].map(sw); return o; });
     // the in-memory copies follow
-    for (const [a, b] of map) {
-      if (enabledStreams.has(a)) { enabledStreams.delete(a); enabledStreams.add(b); }
-      if (parkedStreams.has(a)) { parkedStreams.delete(a); parkedStreams.add(b); }
+    for (const [a, b] of map) {   // 0.21.96 (swap in place): a tile still here under the old path stays watched until its library tile takes its place
+      if (enabledStreams.has(a)) { if (!tiles.has(a)) enabledStreams.delete(a); enabledStreams.add(b); }
+      if (parkedStreams.has(a)) { if (!tiles.has(a)) parkedStreams.delete(a); parkedStreams.add(b); }
     }
     cghMem = null; pinsKeyLoaded = "";
     if (n) {

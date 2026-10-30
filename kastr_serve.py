@@ -446,9 +446,10 @@ MODE = "full"
 # ---- 0.21.96 BOX-OUT (Kenton, 2026-10-30: "For Relays/Camera boxes, I would like them to not be able to directly connect to
 # rooms, they connect to their 'My room' or no room at all, and their shares just go to the library or whatever rooms they tell
 # them to."). WHICH machines: this KASTR is a camera box (mode publisher / publisher-relay: why "box"), or it runs the relay
-# itself -- mode relay, its relay running now, or relay autostart on (relay-autostart.json, or kastr.ini relay_autostart = true):
-# why "relay" (kastr.hosts_relay's test, the 0.21.85 "relay machine"). A viewer display (mode viewer) never is: it exists to
-# watch rooms. A person's everyday KASTR that runs no relay never is. Only the machine's OWN page is told (/api/instance to a
+# itself ALWAYS ON -- mode relay, or relay autostart on (relay-autostart.json, or kastr.ini relay_autostart = true): why
+# "relay". Kenton (2026-10-30, "Only always-on relays"): a relay started by hand (Relay page Start) does NOT count -- that
+# laptop stays a person and joins rooms (so this is narrower than kastr.hosts_relay). A viewer display (mode viewer) never
+# is: it exists to watch rooms. A person's everyday KASTR without an always-on relay never is. Only the machine's OWN page is told (/api/instance to a
 # local caller): web clients of a relay host, its presentation recorder (Host presrec.localhost) and remote pages never are.
 BOXOUT_LOG = []          # what box-out did here (migrations, carried cameras, refusals) -- /api/diag `_boxout`
 BOXOUT_LOG_MAX = 40
@@ -462,12 +463,7 @@ def boxout_state(relay=None):
         return {"on": False, "why": ""}
     if MODE == "relay":
         return {"on": True, "why": "relay"}
-    try:
-        if relay is not None and relay.running():
-            return {"on": True, "why": "relay"}
-    except Exception:
-        pass
-    try:
+    try:   # (a relay merely RUNNING -- started by hand -- is not an always-on relay: Kenton, "Only always-on relays")
         if relay is not None and relay.autostart_config().get("enabled"):
             return {"on": True, "why": "relay"}
     except Exception:

@@ -385,7 +385,14 @@ class HubRegistry:
                 json.dump(kastr_secret.seal_doc(self.path, doc), f)   # 0.21.92: the pinned keys sealed
             if os.name != "nt":
                 os.chmod(tmp, 0o600)
-            os.replace(tmp, self.path)
+            for n in range(5):   # 0.21.96: Windows can hold the old file a moment (a scanner) -- a lost save dropped the newest row
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    if n == 4:
+                        raise
+                    time.sleep(0.05 * (n + 1))
         except OSError as e:
             self.log("rcx: could not write relay-rcx.json: %s" % e)
 

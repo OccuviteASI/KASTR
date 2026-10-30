@@ -1607,6 +1607,11 @@
   .pubui .camrow .stfull { font-size:11px; line-height:1.35; color:var(--text-dim); margin:-2px 0 7px; overflow-wrap:anywhere; }
   .pubui .camrow .stfull.warn { color:var(--asi-amber); padding:5px 8px; border-radius:5px; margin:-2px 0 7px; }
   .pubui .camrow .stfull[hidden] { display:none; }
+  /* 0.21.96: an rtsp:// camera's Transport (Auto / TCP / UDP) and what it lost, under its controls */
+  .pubui .camrow .tsel { max-width:140px; }
+  .pubui .camrow .trline { font-size:11px; line-height:1.35; color:var(--text-dim); margin:6px 0 0; overflow-wrap:anywhere; }
+  .pubui .camrow .trline.warn { color:var(--asi-amber); }
+  .pubui .camrow .trline[hidden] { display:none; }
   .pubui .hint { font-size:11px; color:var(--text-mute); line-height:1.6; margin:0 0 10px; }
   .pubui .warn { border:1px solid rgba(240,173,0,.3); background:rgba(240,173,0,.07); border-radius:6px; padding:10px 11px; font-size:11.5px; color:var(--asi-amber); line-height:1.6; margin-bottom:11px; }
   #pubStatus { font-size:11px; color:var(--text-dim); white-space:pre-wrap; line-height:1.5; font-family:var(--font-mono); }
@@ -27562,6 +27567,21 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           gridMove(a, gsel.value);
         });
         aud.before(gsel);
+        // 0.21.96: Transport -- how an rtsp:// camera reaches this computer (Auto / TCP / UDP; rtsps:// is always TCP)
+        if (/^rtsps?:[/][/]/i.test(a.url || "") && !IS_WEB2) {
+          const tsel = document.createElement("select");
+          tsel.className = "gsel tsel";
+          const secure = /^rtsps:/i.test(a.url);
+          for (const [v, t] of [["auto", "Transport: Auto"], ["tcp", "Transport: TCP"], ["udp", "Transport: UDP"]]) tsel.appendChild(new Option(t, v));
+          const f0 = [...slots.values()].find((x) => x.entry.id === a.id)?.feed;
+          tsel.value = secure ? "tcp" : (f0?.transport || "auto");
+          tsel.disabled = secure;
+          tsel.title = secure ? "rtsps:// always uses TCP — the encryption runs over the TCP connection"
+            : "How this camera's video reaches this computer. Auto = TCP, or UDP when the camera gives no picture over TCP (kept for the rest of the run). "
+            + "TCP = nothing is lost (a slow link waits instead). UDP = what VLC uses; lost packets are counted on the line below. Changing it restarts this camera's stream.";
+          tsel.addEventListener("change", () => window.__rtspTransport?.set?.(a.id, tsel.value));
+          gsel.after(tsel);
+        }
         // 0.18.0: On demand (standby until a viewer asks) + Low for thumbnails (a -low.hang sibling)
         if (window.__odOn?.()) for (const [cls, k, txt, tip] of [["od", OD_KEY, "On demand", "Start this camera's relay stream only when someone watches it; it stops a minute after the last viewer leaves."],
                                           ["lowr", LOWR_KEY, "Low for thumbnails", "Also publish a small 640-wide, 15 fps copy that rail tiles and grid cells use (one extra encode)."]]) {
@@ -32713,11 +32733,46 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (slot.fault) return slot.fault;
     if (!slot.rtsp || slot.moq || slot.native) return null;   // 0.9.1: a native slot has no browser graph to wait for
     if (!feedDown(slot) && performance.now() - slot.since <= FEED_GIVE_UP_MS) return null;
+    // 0.21.96: the bridge knows the camera refused the transport it was asked for -- say so, and which Transport to pick
+    const th = transportFault(slot.feed);
+    if (th) return th + (slot.feedError ? ` (ffmpeg: ${slot.feedError})` : "");
     // ffmpeg's own words, marked as such: "Error number -138 occurred" makes
     // no sense as the page's opinion, but is exactly what to search for.
     return slot.feedError ? `ffmpeg: ${slot.feedError}`
       : "no video from the bridge — check the RTSP url and that the camera "
-      + "is reachable, then press Start to retry";
+      + "is reachable" + (slot.feed?.transport === "tcp" ? " (if it plays in VLC, set Transport to Auto or UDP on its row)" : "")
+      + ", then press Start to retry";
+  }
+
+  // 0.21.96: why an rtsp:// camera gives no picture when the bridge saw it refuse a transport ("" = it did not)
+  function transportFault(f) {
+    if (!f || !f.transport) return "";
+    const vAt = +(f.publish?.videoAt || 0);
+    const fresh = (t) => !!t && !(vAt > t + 5);   // a refusal the camera's video has since outlived is history
+    if (f.transportNow === "tcp" && fresh(f.tcpRefused)) {
+      if (f.transport === "auto") return "the camera refused RTSP over TCP and gave no picture over UDP either"
+        + (f.udpRefused ? " (it refused UDP too)" : "") + " — check the RTSP url and that the camera is reachable";
+      return "the camera refused RTSP over TCP — set Transport to UDP or Auto on its row";
+    }
+    if (f.transportNow === "udp" && fresh(f.udpRefused)) return "the camera refused RTSP over UDP — set Transport to TCP or Auto on its row";
+    return "";
+  }
+
+  // 0.21.96: the row's transport line -- "UDP · lost 37 packets in the last minute (212 since start)",
+  // "Auto · using UDP — the camera refused TCP"; nothing on TCP unless the demuxer reported loss
+  function transportLine(f) {
+    if (!f || !f.transport) return "";
+    const L = f.loss || {}, udp = f.transportNow === "udp";
+    const all = L.missed | 0, m60 = L.missed60 | 0, fr60 = L.frames60 | 0;   // "max delay reached" pairs with each missed-packets line: not counted twice
+    const parts = [];
+    if (udp || all || (L.frames | 0)) {
+      parts.push(all ? "lost " + m60 + " packet" + (m60 === 1 ? "" : "s") + " in the last minute (" + all + " since start)" : "no packets lost");
+      if (fr60) parts.push(fr60 + " frame" + (fr60 === 1 ? "" : "s") + " dropped in the last minute");
+    }
+    const head = f.transport === "auto" ? "Auto · using " + (udp ? "UDP" : "TCP") + (udp && f.transportWhy ? " — " + f.transportWhy : "")
+      : (udp ? "UDP" : "TCP");
+    if (!udp && !parts.length) return "";
+    return head + (parts.length ? " · " + parts.join(" · ") : "");
   }
 
   // A slot Start is allowed to tear down and try again.
@@ -32954,6 +33009,14 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       let sf = row.querySelector(":scope > .stfull");
       if (!sf && full !== short) { sf = document.createElement("div"); row.querySelector(".top")?.after(sf); }
       if (sf) { sf.className = "stfull " + (st ? st.cls : ""); sf.textContent = full !== short ? full : ""; sf.hidden = full === short; }
+      {   // 0.21.96: Transport follows the bridge; the line under the controls says which one runs and what it lost
+        const ts = row.querySelector(".tsel"), f = slot?.feed;
+        if (ts && f?.transport && !ts.disabled && document.activeElement !== ts && !(slot.tselAt && Date.now() - slot.tselAt < 6000) && ts.value !== f.transport) ts.value = f.transport;
+        const flt = transportFault(f), txt = flt ? (f.transport === "auto" ? "Auto · " : f.transportNow === "udp" ? "UDP · " : "TCP · ") + flt : transportLine(f);   // a server-published camera has no faultText: the refusal shows here
+        let tl = row.querySelector(":scope > .trline");
+        if (!tl && txt) { tl = document.createElement("div"); tl.className = "trline"; row.appendChild(tl); }
+        if (tl) { tl.textContent = txt; tl.hidden = !txt; tl.classList.toggle("warn", !!flt || (f?.loss?.missed60 | 0) > 0); }
+      }
       // 0.9.8: the Audio box follows the entry and shows the server's truth
       const ab = row.querySelector(".aud input");
       if (ab) {
@@ -34383,6 +34446,34 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     },
     toggle: (id) => { const v = window.__rtspPt.get(id); if (v !== undefined) window.__rtspPt.set(id, !v); },
   };
+  // 0.21.96: an rtsp:// camera's Transport (Auto / TCP / UDP) -- kept by the bridge per camera URL (rtsp-feeds.json)
+  window.__rtspTransport = {
+    get: (id) => { const a = added.find((x) => x.id === id); const f = a && slots.get(a.id)?.feed; return f ? (f.transport || null) : null; },
+    line: (id) => { const a = added.find((x) => x.id === id); return transportLine(a && slots.get(a.id)?.feed); },
+    set: async (id, mode) => {
+      const a = added.find((x) => x.id === id);
+      if (!a?.url) return null;
+      const slot = slots.get(a.id);
+      if (a.feedId == null) { window.__toast?.("This camera is not on the bridge yet — try again in a moment", 3500, { level: "warn" }); refreshUi(); return null; }
+      if (slot) slot.tselAt = Date.now();
+      const r = await nativePost("/api/rtsp/transport", { id: a.feedId, transport: mode });
+      if (!r || r.error) {
+        window.__toast?.("Transport not changed: " + (r?.error || "no answer"), 5000, { level: "warn" });
+        if (slot) slot.tselAt = 0;
+        refreshUi();
+        return r;
+      }
+      if (slot) {
+        if (slot.feed) Object.assign(slot.feed, { transport: r.transport, transportNow: r.transportNow, transportWhy: null, tcpRefused: null, udpRefused: null, loss: null });
+        slot.monitorTranscode = false; slot.fault = null; slot.feedError = null;
+        if (r.restarted) { try { restartMonitor(slot); } catch {} }
+      }
+      if (r.restarted) window.__toast?.("“" + (a.label || rtspLabel(a.url)) + "” now uses "
+        + ({ auto: "Auto (TCP, or UDP when TCP gives no picture)", tcp: "TCP", udp: "UDP" }[r.transport] || r.transport) + " — restarting its stream", 4000, { level: "info" });
+      refreshUi();
+      return r;
+    },
+  };
   // 0.9.5: per-feed audio -- pane menu toggle (the flag lives by url)
   window.__rtspAudio = {
     get: (id) => { const a = added.find((x) => x.id === id); return a ? a.audio !== false : undefined; },
@@ -35041,7 +35132,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const feedAlertLog = [];   // rig: what was said, when
   function feedAlertReason(slot) {
     const pi = slot.feed?.publish || slot.pub || null;
-    const r = (!slot.native && faultText(slot)) || slot.feed?.error || (pi && pi.running === false ? (pi.lastExit?.reason || pi.error) : "") || "";
+    const r = (!slot.native && faultText(slot)) || (slot.native && transportFault(slot.feed)) || slot.feed?.error || (pi && pi.running === false ? (pi.lastExit?.reason || pi.error) : "") || "";
     return String(r).replace(/\[[^\]]* @ [0-9a-fx]+\]\s*/gi, "").replace(/\?[^ \/]*/g, "").replace(/\s+/g, " ").trim().slice(0, 140);   // ffmpeg's "[tcp @ 0000...]" tags and URL queries are noise here
   }
   function feedAlertState(slot) {   // -> { down, tries, ok }
@@ -35395,6 +35486,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         fault: faultText(s),
         badge: s.badge.textContent,
         native: !!s.native, pubWanted: !!s.pubWanted, pub: s.pub || null,   // 0.9.1
+        transport: s.feed?.transport ? { mode: s.feed.transport, now: s.feed.transportNow, why: s.feed.transportWhy || null,   // 0.21.96
+          tcpRefused: s.feed.tcpRefused || null, udpRefused: s.feed.udpRefused || null, line: transportLine(s.feed),
+          loss: s.feed.loss ? { reader: s.feed.loss.reader, missed: s.feed.loss.missed, missed60: s.feed.loss.missed60, late: s.feed.loss.late,
+            late60: s.feed.loss.late60, frames: s.feed.loss.frames, frames60: s.feed.loss.frames60, decode: s.feed.loss.decode, since: s.feed.loss.since } : null } : null,
         audio: s.entry.audio !== false,   // 0.9.5
         monitor: { behind: +(s.monitorBehind ?? 0).toFixed(1), rate: s.video?.playbackRate, down: !!s.monitorDown, paused: !!s.video?.paused, time: +(s.video?.currentTime ?? 0).toFixed(1),
                    mse: !!s.mon, ws: !!(s.mon && s.mon.wsOpened), bytesAge: s.mon ? Math.round((performance.now() - s.mon.lastBytesAt) / 1000) : null, transcode: !!s.monitorTranscode, loaded: !!s.monitorLoaded },   // 0.9.5 / 0.9.7 / 0.21.10 ws

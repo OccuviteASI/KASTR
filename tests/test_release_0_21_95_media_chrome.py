@@ -22,6 +22,16 @@ class MediaChrome(unittest.TestCase):
         self.assertIn('document.addEventListener("keydown", () => { idleKey = true; }, true);', body)
         self.assertIn("|| (idleKey && document.activeElement", body)
 
+    def test_resting_pointer_does_not_hold_the_chrome(self):   # Kenton: "fade out if the mouse is hovering, but doesn't move"
+        i = self.src.index("const IDLE_MS = 3000")
+        body = self.src[i:self.src.index("window.__idleChrome", i)]
+        self.assertNotIn("idleOver", body)
+        self.assertNotIn('addEventListener("pointerover"', body)
+        self.assertIn('const idleBusy = () => !!stageWrap.querySelector(\'[data-scrub="1"], .gmenu\')', body)
+        # a mouse click on a control that faded under a resting pointer only wakes it (no fall-through to the tile)
+        self.assertIn('if (!stageWrap.classList.contains("idle")) return;', body)
+        self.assertNotIn('e.pointerType !== "touch" || !stageWrap', body)
+
     def test_media_bar_only_on_its_own_tile(self):
         self.assertIn('#stage .pane:not(:hover):not(:has(:focus-visible)):not(:has([data-scrub="1"])) > .mediabar', self.src)
         self.assertIn('#stage .pubpane:not(:hover):not(:has(:focus-visible)):not(:has([data-scrub="1"])) > .mediabar', self.src)

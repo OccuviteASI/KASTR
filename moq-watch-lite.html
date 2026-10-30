@@ -12105,24 +12105,26 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__spotBackBtn = { go: spotGoBack, items: () => spotItemsNow().items.map((x) => x.target), showing: () => spotShowing(spotItemsNow()), shown: () => spotBackBtn.classList.contains("show") };   // rig
   // 0.21.0: idle chrome -- 3 s without pointer/key input hides the media bar, the filename bars, the
   // chevrons, the zoom controls and the Gallery pill (field: "auto hide the control bar ... file name,
-  // chevron button and any other overlay"). Never while scrubbing, while a control has focus, or while
-  // the pointer rests on a control. Touch: any tap shows (no tap-to-hide -- a tap already selects).
+  // chevron button and any other overlay"). Never while scrubbing or while a key put focus on a control.
+  // 0.21.95 (Kenton: "fade out if the mouse is hovering, but doesn't move for 3 seconds"): a pointer RESTING on a
+  // control no longer holds the chrome up -- only movement does. Touch: any tap shows (no tap-to-hide -- a tap already selects).
   const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.gmenu,.latb";   // 0.21.65: the name row (.bar/.label + marks) never hides now
-  let idleT = null, idleOver = false, idleKey = false;
+  let idleT = null, idleKey = false;
   // 0.21.95 (Kenton: media "never hides the control elements or the name"): a CLICKED Play / volume / seek kept focus inside the
   // stage, and focus held the chrome up for good. Only focus a key put there (Tab) holds it now.
   document.addEventListener("keydown", () => { idleKey = true; }, true);
   document.addEventListener("pointerdown", () => { idleKey = false; }, true);
-  const idleBusy = () => idleOver || !!stageWrap.querySelector('[data-scrub="1"], .gmenu')
+  const idleBusy = () => !!stageWrap.querySelector('[data-scrub="1"], .gmenu')
     || (idleKey && document.activeElement && document.activeElement !== document.body && stageWrap.contains(document.activeElement) && document.activeElement.matches("button,input,select"));
   const idleHide = () => { if (idleBusy()) { idleT = setTimeout(idleHide, 1000); return; } stageWrap.classList.add("idle"); };
   const idleShow = () => { stageWrap.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(idleHide, IDLE_MS); };
   for (const ev of ["pointermove", "pointerdown", "wheel"]) stageWrap.addEventListener(ev, idleShow, { passive: true });
   // 0.21.5: a touch on a hidden control (pointer-events:none while idle) fell through to the tile underneath
-  // and switched the spotlight; the first tap only wakes the controls (mouse never enters this path)
+  // and switched the spotlight; the first tap only wakes the controls. 0.21.95: a mouse that rested on a control
+  // until it faded can click without moving -- that first click only wakes them too.
   let idleSwallowUntil = 0;
   stageWrap.addEventListener("pointerdown", (e) => {
-    if (e.pointerType !== "touch" || !stageWrap.classList.contains("idle")) return;
+    if (!stageWrap.classList.contains("idle")) return;
     for (const el of stageWrap.querySelectorAll(IDLE_CTL)) {
       const r = el.getBoundingClientRect();
       if (r.width && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { idleSwallowUntil = performance.now() + 700; break; }
@@ -12130,9 +12132,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }, { capture: true, passive: true });
   stageWrap.addEventListener("click", (e) => { if (performance.now() < idleSwallowUntil) { idleSwallowUntil = 0; e.stopPropagation(); e.preventDefault(); } }, true);
   document.addEventListener("keydown", idleShow);
-  stageWrap.addEventListener("pointerover", (e) => { idleOver = !!e.target.closest?.(IDLE_CTL); });
   stageWrap.addEventListener("pointerleave", (e) => {   // 0.21.37: the mouse left the stage -> the chrome goes now, not in 3 s
-    idleOver = false;
     if (e.pointerType === "mouse" && !idleBusy()) { clearTimeout(idleT); stageWrap.classList.add("idle"); }
   });
   idleShow();

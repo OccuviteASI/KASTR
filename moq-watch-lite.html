@@ -2598,6 +2598,21 @@
   .gedit .geside .gelibh[aria-expanded="false"] .chev { transform:rotate(-90deg); }
   .gedit .geside .gelibh .n { margin-left:auto; font-family:var(--font-mono); font-weight:400; color:var(--text-mute); }
   .gedit .geside .gelibs { width:100%; margin:4px 0; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:4px; font-size:11px; padding:2px 4px; }
+  /* 0.21.96 (Kenton: "give me some filters for what is viewable ... sometimes I only want online"): the Library group's filters */
+  .gedit .geside .gelibf { display:flex; flex-direction:column; gap:5px; margin:4px 0 6px; }
+  .gedit .geside .gelibseg { display:flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; }
+  .gedit .geside .gelibseg button { flex:1; height:24px; background:transparent; color:var(--text-dim); font-size:11px; font-weight:500; border-radius:0; }
+  .gedit .geside .gelibseg button + button { border-left:1px solid var(--line); }
+  .gedit .geside .gelibseg button:hover { background:var(--surface-2); color:var(--text); }
+  .gedit .geside .gelibseg button[aria-pressed="true"] { background:var(--asi-blue); color:var(--on-accent); }
+  .gedit .geside .gelibchips { display:flex; flex-wrap:wrap; gap:4px; }
+  .gedit .geside .gelibchip { height:22px; padding:0 8px; border-radius:11px; font-size:10px; font-weight:500; background:transparent; border:1px solid var(--line); color:var(--text-dim); display:inline-flex; align-items:center; gap:4px; }
+  .gedit .geside .gelibchip:hover { border-color:var(--asi-blue-dim); color:var(--text); }
+  .gedit .geside .gelibchip[aria-pressed="true"] { background:var(--asi-blue); border-color:var(--asi-blue); color:var(--on-accent); }
+  .gedit .geside .gelibchip .n { font-family:var(--font-mono); opacity:.8; }
+  .gedit .geside .gelibseg button:focus-visible, .gedit .geside .gelibchip:focus-visible { outline:2px solid var(--asi-blue); outline-offset:1px; }
+  .gedit .geside .gelibf .gelibs { margin:0; }
+  .gedit .geside .gesi[data-st="offline"] .gelst, .gedit .geside .gesi[data-st="site"] .gelst { color:var(--asi-amber); }
   .gedit .geside .gesi .gelst { font-size:9px; text-transform:uppercase; color:var(--text-mute); margin-left:auto; flex:none; }
   .gedit .geside .gesi[data-st="live"] .gelst { color:var(--asi-red); }
   .gedit .geside .gelibmore { font-size:10px; color:var(--text-mute); padding:4px; }
@@ -16110,23 +16125,52 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       function paintLib(f) {
         const L = o.library, rows = L.rows() || [];
         if (c.libOpen == null) c.libOpen = true;   // open at first (its header folds it)
+        // 0.21.96 (Kenton: "sometimes I only want online"): Online (default) / Live / All, the stream types and the site, kept for
+        // the next grid (L.ui + L.save: this viewer's choice, the page works without storage)
+        const U = L.ui || (c.libUi ||= { show: "online", kinds: [], site: "" });
+        const save = () => { try { L.save?.(); } catch {} paintList(); };
+        const sites = L.sites() || [];
+        const site = sites.includes(U.site) ? U.site : "";   // a site that left the list shows all (the choice is kept)
+        const showOk = (s) => U.show === "all" || (U.show === "live" ? s.state === "live" || s.state === "asleep" : s.state !== "offline" && s.state !== "site");
+        const textOk = (s) => !f || (s.label + " " + s.site).toLowerCase().includes(f);
+        const base = rows.filter((s) => showOk(s) && textOk(s) && (!site || s.site === site));   // the type chips count these
+        const m = base.filter((s) => !U.kinds.length || U.kinds.includes(s.kind));
         const g = mkEl("div", "gelib");
         const h = mkEl("button", "gelibh"); h.type = "button"; h.setAttribute("aria-expanded", String(!!c.libOpen));
         h.title = "Streams from the fleet's stream library, any site";
         const cv = mkEl("span", "chev"); cv.innerHTML = icon("chevron");
-        h.append(cv, mkEl("span", "", "Library"), mkEl("span", "n", String(rows.length)));
+        h.append(cv, mkEl("span", "", "Library"), mkEl("span", "n", m.length === rows.length ? String(rows.length) : m.length + " of " + rows.length));
         h.addEventListener("click", () => { c.libOpen = !c.libOpen; paintList(); });
         g.appendChild(h);
         if (!c.libOpen) return g;
-        const sites = L.sites() || [];
+        const fb = mkEl("div", "gelibf");
+        const seg = mkEl("div", "gelibseg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Show library streams");
+        for (const [k, t, tip] of [["online", "Online", "Streams whose box or app is online (live, asleep or ready)"], ["live", "Live", "Live now, and asleep cameras that start when added"], ["all", "All", "Every library stream, offline ones too"]]) {
+          const b = mkEl("button", "", t); b.type = "button"; b.dataset.show = k; b.title = tip; b.setAttribute("aria-pressed", String(U.show === k));
+          b.addEventListener("click", () => { U.show = k; save(); });
+          seg.appendChild(b);
+        }
+        fb.appendChild(seg);
+        const kn = new Map();
+        for (const s of base) kn.set(s.kind, (kn.get(s.kind) || 0) + 1);
+        const chips = mkEl("div", "gelibchips"); chips.setAttribute("role", "group"); chips.setAttribute("aria-label", "Library stream types");
+        for (const [k, t] of L.kinds || []) {
+          const on = U.kinds.includes(k);
+          if (!on && !kn.get(k)) continue;   // only the types there are (a picked one stays, to unpick)
+          const b = mkEl("button", "gelibchip", t); b.type = "button"; b.dataset.k = k; b.setAttribute("aria-pressed", String(on));
+          b.appendChild(mkEl("span", "n", String(kn.get(k) || 0)));
+          b.addEventListener("click", () => { U.kinds = on ? U.kinds.filter((x) => x !== k) : [...U.kinds, k]; save(); });
+          chips.appendChild(b);
+        }
+        if (chips.childNodes.length) fb.appendChild(chips);
         const sel = mkEl("select", "gelibs"); sel.setAttribute("aria-label", "Library site");
         sel.appendChild(new Option("All sites", ""));
         for (const s of sites) sel.appendChild(new Option(s, s));
-        sel.value = sites.includes(c.libSite) ? c.libSite : "";
-        sel.addEventListener("change", () => { c.libSite = sel.value; paintList(); });
+        sel.value = site;
+        sel.addEventListener("change", () => { U.site = sel.value; save(); });
         sel.addEventListener("keydown", (e) => e.stopPropagation());
-        g.appendChild(sel);
-        const m = rows.filter((s) => (!sel.value || s.site === sel.value) && (!f || (s.label + " " + s.site).toLowerCase().includes(f)));
+        fb.appendChild(sel);
+        g.appendChild(fb);
         for (const s of m.slice(0, 60)) {
           const it = mkEl("div", "gesi"); it.dataset.key = s.key; it.dataset.st = s.state || "";
           it.title = s.label + " \u00b7 " + s.site + " \u2014 drag onto a spot (Shift: add it to that spot's turns)";
@@ -16139,7 +16183,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           g.appendChild(it);
         }
         if (m.length > 60) g.appendChild(mkEl("div", "gelibmore", (m.length - 60) + " more \u2014 search to narrow"));
-        if (!m.length) g.appendChild(mkEl("div", "gelibmore", rows.length ? "No library stream matches." : "The library is loading, or it is empty."));
+        if (!m.length) g.appendChild(mkEl("div", "gelibmore", !rows.length ? "The library is loading, or it is empty."
+          : U.show !== "all" && rows.some((s) => !showOk(s)) ? "No " + U.show + " library stream matches \u2014 All shows the others." : "No library stream matches."));
         return g;
       }
       function drawThumb(th) {
@@ -25759,13 +25804,27 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       return x.n + (x.n === 1 ? " camera" : " cameras") + " from " + site + ", about " + mbps(x.kbps) + (mine ? " over the " + site + " link" + link : "");
     }).join("; ") + ". Each viewer of this grid pulls them.";
   }
+  // 0.21.96: the builder's Library filters (Online / Live / All, types, site), this viewer's choice for every grid
+  const GELIB_KEY = "kastr.gelib.ui";
+  const gelibUi = { show: "online", kinds: [], site: "" };
+  try {
+    const o = JSON.parse(localStorage.getItem(GELIB_KEY) || "null");
+    if (o && typeof o === "object") {
+      if (["online", "live", "all"].includes(o.show)) gelibUi.show = o.show;
+      if (Array.isArray(o.kinds)) gelibUi.kinds = o.kinds.map(String).filter((k) => k !== "live" && LIB_CHIPS.some(([c]) => c === k));
+      gelibUi.site = String(o.site || "");
+    }
+  } catch {}
   function libBuilderSrc() {   // cgEdit hands it to the builder (null = no library here)
     if (!libOn()) return null;
     if (!libMeta.fullAt || Date.now() - libMeta.at > 60000) libPoll(true);
     return {
       rows: () => [...libCat.values()].filter((e) => !e.hidden && libStateOf(e) !== "gone")
         .sort((a, b) => a.site.localeCompare(b.site) || libCmpName(a, b))
-        .map((e) => ({ key: e.path, label: (e.label + " \u00b7 " + e.box).slice(0, 40), site: e.site, state: libStateOf(e), draw: (cx, w, h) => libStillDraw(e, cx, w, h) })),
+        .map((e) => ({ key: e.path, label: (e.label + " \u00b7 " + e.box).slice(0, 40), site: e.site, state: libStateOf(e), kind: libKindOf(e.kind), draw: (cx, w, h) => libStillDraw(e, cx, w, h) })),
+      kinds: LIB_CHIPS.filter(([k]) => k !== "live").map(([k, t]) => [k, t]),
+      ui: gelibUi,
+      save: () => { try { localStorage.setItem(GELIB_KEY, JSON.stringify(gelibUi)); } catch {} },
       sites: () => [...new Set([...libCat.values()].filter((e) => !e.hidden).map((e) => e.site))].sort(),
       label: (k) => { const e = libCat.get(String(k)); return e ? (e.label + " \u00b7 " + e.box).slice(0, 40) : null; },
       cost: (slots) => libCostHint(slots),

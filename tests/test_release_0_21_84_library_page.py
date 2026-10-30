@@ -291,7 +291,7 @@ class BuilderLibraryGroup(unittest.TestCase):
     def test_editor_group_search_site_cost(self):
         self.assertIn("if (o.library) { try { list.appendChild(paintLib(f)); }", P)
         g = _fn(P, "      function paintLib(f) {")
-        for k in ('mkEl("span", "", "Library")', 'new Option("All sites", "")', "c.libSite", "m.slice(0, 60)", "camDrag(e, { kind: \"cam\", key: s.key"):
+        for k in ('mkEl("span", "", "Library")', 'new Option("All sites", "")', "U.site = sel.value", "m.slice(0, 60)", "camDrag(e, { kind: \"cam\", key: s.key"):
             self.assertIn(k, g)
         self.assertIn('o.library?.label?.(k) || "Camera (offline)"', P)
         self.assertIn("c.paintCost = () =>", P)

@@ -256,7 +256,7 @@ class ReportPath(unittest.TestCase):
 
     def test_room_json_is_written_in_my_room(self):
         # only the PUBLIC state is off in My room; the member broadcast (room.json) is not gated by isPersonalSlug
-        self.assertIn('const pubState = stateProducer(() => (isPersonalSlug(CHANNEL) ? "" : "~state/"', PAGE)
+        self.assertIn('const pubState = stateProducer(() => (isHiddenSlug(CHANNEL) ? "" : "~state/"', PAGE)   # 0.21.96: + a meeting's room (mt-)
         self.assertIn('const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json", "pt.json"]', PAGE)
 
     def test_the_owner_reads_it_and_passes_kind_and_reporter(self):

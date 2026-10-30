@@ -42,7 +42,7 @@ class Page(unittest.TestCase):
     def test_my_room_members_name_themselves_in_room_json(self):
         # My room has no public state records: the backstage list (and photos) read the room-only room.json instead
         p = read("moq-watch-lite.html")
-        self.assertIn("roomModel.who = isPersonalSlug(CHANNEL) ? { op: pubModel.op", p)
+        self.assertIn("roomModel.who = isHiddenSlug(CHANNEL) ? { op: pubModel.op", p)   # 0.21.96: + a meeting's room (mt-)
         self.assertIn('const key = "rj:" + path, cur = members.get(key);', p)
         self.assertIn('if (members.delete("rj:" + path))', p)
         self.assertIn("if (m.state && !m.rj && !live.has(key))", p)

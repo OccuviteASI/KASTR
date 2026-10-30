@@ -288,7 +288,7 @@ class Hub(unittest.TestCase):
         rows = self.svc.clients_view()
         self.assertTrue(all(self.slug in r["rooms"] for r in rows if r["node"] == GUEST))   # the hub's own Users table (admins)
         page = _read("kastr_relay.py")
-        self.assertIn('st["rooms"] = [s for s in self.store.room_slugs() if not is_personal(s)]', page)
+        self.assertIn('st["rooms"] = [s for s in self.store.room_slugs() if not is_personal(s) and not is_meet_room(s)]', page)   # 0.21.96: + a meeting's room (mt-)
 
     def test_person_invite_delivery_rate_limit_and_sender_in_room(self):
         salt = "00112233"   # a LOCKED room: the person invite opens it without its room code

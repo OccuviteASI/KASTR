@@ -104,6 +104,7 @@ import kastr_access   # 0.21.89: Ask for access (the hub's desk of asks, answers
 import kastr_gif   # 0.21.91: GIF search -- GIPHY through the hub (the key stays on the hub)
 import kastr_secret   # 0.21.92: secrets at rest are sealed (DPAPI / owner-only key), logs masked
 import kastr_templates   # 0.21.92: meeting templates (the hub's store, its encrypted deck store, the planner)
+import kastr_meetings   # 0.21.96: scheduled meetings (the hub's store, the recurrence rules, the calendar file)
 
 LOG_LINES = 200
 TOKEN_TTL = 86400          # 24 h: outlives a shift; refresh handles the rest
@@ -171,7 +172,8 @@ PERSONAL_CODE_MIN = 4          # what an EXISTING personal code may be (0.21.75 
 PERSONAL_CODE_NEW_MIN = 8      # 0.21.89 (Kenton: "8 everywhere"): a NEW or CHANGED personal code (it also guards the messages key)
 PERSONAL_ALIAS_TTL = 90 * 86400   # 0.21.91: a name someone changed away from points at the new one (and nobody else takes it) this long
 PERSONAL_CODE_MAX = 128
-PERSONAL_RESERVED = 'room names starting with "me-" are reserved for personal rooms (My room) -- pick another name'
+PERSONAL_RESERVED = ('room names starting with "me-" or "mt-" are reserved for personal rooms (My room) and scheduled meetings '
+                     '-- pick another name')   # 0.21.96: + "mt-"
 # 0.21.78 (Kenton: "I need to be able to share out access to 'my room' as wanted" / "Only allow people in 'My room' if the
 # owner is in it. If the owner leaves the room, it should kick everyone to the lobby" / right-click a person -> invite): the
 # owner shares My room with PEOPLE (their device's host -- the identity KASTR already keys kicks and the Users list on; 0.22
@@ -188,6 +190,8 @@ PINBOX_TTL = 180               # s: an invite waits this long for the invited pa
 PINBOX_KEEP = 64               # invites the hub keeps for its spokes' long-polls
 TPL_APPLIED_S = 12 * 3600       # 0.21.92: a room template applied to another room -- its deck opens from there this long
 TPL_ROOM_NEW_S = 600            # 0.21.92: "Create a new room for this" -- the hub marks a room made at most this long ago, never an older one
+MEET_LEASE_S = 60               # 0.21.96: the device applying a meeting's template holds it this long (two pages arriving together)
+MEET_TICK_S = 30                # 0.21.96: the hub's meetings loop (drop old meetings, close the rooms of ended ones)
 # 0.21.85 (Kenton: "Add an option to see all people online in the people drop-down"): public rooms announce their people on the
 # public ~presence / ~state prefixes (the page's rooms rail reads them fleet-wide); a personal room says nothing in public
 # (0.21.75), so its pages' BEATS say where they are: the hub keeps the fleet's table (its own pages' beats, its spokes'
@@ -1375,12 +1379,24 @@ def is_personal(slug):
 
 
 def personal_reserved(slug):
-    """0.21.75: a name no room create / rename / auto-create may take (every "me-..." name)."""
-    return str(slug or "").startswith(PERSONAL_PREFIX)
+    """0.21.75: a name no room create / rename / auto-create may take (every "me-..." name). 0.21.96: and every "mt-..." name
+    (a scheduled meeting's own room -- only the hub makes it, for the meeting)."""
+    s = str(slug or "")
+    return s.startswith(PERSONAL_PREFIX) or s.startswith(kastr_meetings.ROOM_PREFIX)
 
 
 def is_personal_rec(rec):
     return isinstance(rec, dict) and isinstance(rec.get("personal"), dict)
+
+
+def is_meet_room(slug):
+    """0.21.96: a scheduled meeting's own room (mt-<12 hex>) -- hidden like My room."""
+    return kastr_meetings.is_room(slug)
+
+
+def is_hidden_rec(rec):
+    """0.21.96: a record never listed nor counted as a kept room: My room, a scheduled meeting's own room."""
+    return is_personal_rec(rec) or (isinstance(rec, dict) and bool(rec.get("meeting")))
 
 
 def personal_name(name):
@@ -4120,6 +4136,9 @@ class AuthStore:
         # 0.21.92: meeting templates (templates/templates.json; the hub's) -- a save moves the store's version like the library
         self.tplbook = kastr_templates.TemplateBook(state_dir, log)
         self.tplbook.on_save = self._lib_saved
+        # 0.21.96: scheduled meetings (meetings/meetings.json; the hub's) -- carried in the records bundle like the templates
+        self.meetbook = kastr_meetings.MeetingBook(state_dir, log)
+        self.meetbook.on_save = self._lib_saved
 
     def _path(self):
         return os.path.join(self.state_dir, "relay-auth.json")
@@ -4474,6 +4493,32 @@ class AuthStore:
             self._save()
             return self._invite_row(rec), token, 200
 
+    def invite_meet_put(self, room, iid, digest, exp, by, mid):
+        """0.21.96: a scheduled meeting's guest link. Its id and secret are DERIVED from the hub's key (kastr_meetings), so every
+        copy gives the same link; this keeps its digest like any link's -> "ok" | "clash" (that id holds another digest: a
+        hand-over -- the caller moves to the next generation) | why."""
+        if not kastr_meetings.is_room(room) or not re.match(r"^[0-9a-f]{8}$", str(iid or "")) or not re.match(r"^[0-9a-f]{64}$", str(digest or "")):
+            return "bad meeting link"
+        with self.lock:
+            now = time.time()
+            self._invites_prune_locked(now)
+            rec = self.invites.get(iid)
+            if rec is not None:
+                if rec.get("room") != room or not hmac.compare_digest(str(rec.get("digest") or ""), digest):
+                    return "clash"
+                if rec.get("revoked"):   # guests switched off and on again: the same link works again
+                    rec["revoked"], rec["revokedAt"] = False, None
+                rec["exp"] = int(exp)
+                self._save()
+                return "ok"
+            if len(self.invites) >= INVITES_MAX:
+                return "this hub holds too many invite links -- try again later"
+            self.invites[iid] = {"id": iid, "room": room, "digest": digest, "by": clean_label(by, 40), "created": int(now),
+                                 "exp": int(exp), "ttl": max(0, int(exp - now)), "revoked": False, "revokedAt": None, "uses": 0,
+                                 "hosts": [], "meet": str(mid or "")[:16]}
+            self._save()
+            return "ok"
+
     def invite_holds(self, token):
         """Is this invite's id one of OUR records (a hub, or a box that once was one)?"""
         m = INVITE_RE.match(str(token or ""))
@@ -4663,7 +4708,13 @@ class AuthStore:
 
     def kept_slugs(self):
         with self.lock:
-            return sorted(k for k, r in self.rooms.items() if r.get("persistent") and not is_personal_rec(r))   # 0.21.75: not My rooms
+            return sorted(k for k, r in self.rooms.items() if r.get("persistent") and not is_hidden_rec(r))   # 0.21.75: not My rooms (0.21.96: nor meetings)
+
+    def chat_kept_slugs(self):
+        """0.21.96: the rooms whose chat is kept while idle -- the kept rooms and every scheduled meeting's own room (its chat
+        stays from one occurrence to the next)."""
+        with self.lock:
+            return sorted(k for k, r in self.rooms.items() if r.get("persistent") and not is_personal_rec(r))
 
     def rooms_public(self):
         """The /api/rooms rows -- a superset of 0.11's [{slug}]: what a gate or a
@@ -4672,8 +4723,8 @@ class AuthStore:
         with self.lock:
             rows = []
             for k, r in sorted(self.rooms.items()):
-                if is_personal_rec(r):
-                    continue                    # 0.21.75: a personal room is never listed (nobody else learns it exists)
+                if is_hidden_rec(r):
+                    continue                    # 0.21.75: a personal room is never listed (nobody else learns it exists); 0.21.96: nor a meeting's
                 row = {"slug": k, "locked": bool(r.get("hash")), "persistent": bool(r.get("persistent")),
                        "plain": bool(r.get("plain") and not r.get("hash") and not r.get("persistent")),   # 0.21.25
                        "creator": str(r.get("creator") or ""), "created": r.get("created"), "at": r.get("at")}
@@ -4847,6 +4898,11 @@ class AuthStore:
                     self.tplbook.rename_person(key, nkey, ndisp)
                 except Exception as e:
                     self.log("relay auth: personal templates did not follow a rename: %s" % e)
+            if nkey != key or ndisp != personal_name(old):
+                try:   # 0.21.96: the meetings they organize and the invitations they hold follow too
+                    self.meetbook.rename_person(key, nkey, ndisp)
+                except Exception as e:
+                    self.log("relay auth: meetings did not follow a rename: %s" % e)
             return ("renamed" if nkey != key else "same"), {"slug": slug, "old": old, "name": ndisp}
 
     def personal_unrename(self, new, old):
@@ -4862,6 +4918,10 @@ class AuthStore:
             self._save()
             try:   # 0.21.92: their personal templates go back too
                 self.tplbook.rename_person(new, old, old)
+            except Exception:
+                pass
+            try:   # 0.21.96: and their meetings
+                self.meetbook.rename_person(personal_key(new), personal_key(old), personal_name(old))
             except Exception:
                 pass
             return True
@@ -5084,7 +5144,8 @@ class AuthStore:
                                           "lapsed": self.lapsed,                        # 0.21.91: lapsed rooms' generations go too
                                           "library": self.libbook.export(),             # 0.21.84: the stream library's catalogue too
                                           "personalAliases": self.paliases,             # 0.21.91: names people changed away from
-                                          "templates": self.tplbook.export()}))         # 0.21.92: meeting templates (never a deck key)
+                                          "templates": self.tplbook.export(),           # 0.21.92: meeting templates (never a deck key)
+                                          "meetings": self.meetbook.export()}))         # 0.21.96: scheduled meetings (never a link token)
 
     def merge_bundle(self, b):
         """0.21.53: a hand-BACK -- what the standby changed while it was the hub. Per room the newer `at` wins, a newer
@@ -5161,6 +5222,8 @@ class AuthStore:
                 n["library"] = self.libbook.merge(b["library"])
             if isinstance(b.get("templates"), dict):   # 0.21.92: templates saved / edited / deleted on the standby
                 n["templates"] = self.tplbook.merge(b["templates"])
+            if isinstance(b.get("meetings"), dict):   # 0.21.96: meetings scheduled / changed / removed on the standby
+                n["meetings"] = self.meetbook.merge(b["meetings"])
             self._save()
         return n
 
@@ -5207,6 +5270,8 @@ class AuthStore:
                 n["library"] = self.libbook.import_(b["library"])
             if isinstance(b.get("templates"), dict):   # 0.21.92: meeting templates (their decks are copied apart, with their keys)
                 n["templates"] = self.tplbook.import_(b["templates"])
+            if isinstance(b.get("meetings"), dict):   # 0.21.96: scheduled meetings
+                n["meetings"] = self.meetbook.import_(b["meetings"])
             self._save()
         return n
 
@@ -5407,6 +5472,10 @@ class AuthStore:
             self.tplbook.rename_room(old, new)
         except Exception as e:
             self.log("relay auth: room %s renamed -- its templates did not follow: %s" % (old, e))
+        try:   # 0.21.96: and the meetings held in it
+            self.meetbook.rename_room(old, new)
+        except Exception as e:
+            self.log("relay auth: room %s renamed -- its meetings did not follow: %s" % (old, e))
         return None, 200
 
     def is_closed(self, slug):
@@ -5689,7 +5758,7 @@ class AuthStore:
                 rec = self._revive_locked(slug, {"salt": "", "hash": "", "roomKey": os.urandom(16).hex(), "at": now, "persistent": False,
                                                  "creator": str(item.get("by") or "")[:64], "created": now, "plain": True})   # 0.21.91
             if was_empty and board_has(board) and not rec.get("persistent"):
-                kept = sum(1 for k, r in self.rooms.items() if r.get("persistent") and k != slug and not is_personal_rec(r))   # 0.21.75
+                kept = sum(1 for k, r in self.rooms.items() if r.get("persistent") and k != slug and not is_hidden_rec(r))   # 0.21.75 (0.21.96)
                 if kept >= KEPT_MAX:
                     return None, 409, ("this relay already keeps %d rooms open -- turn Keep off for one on the hub's Relay page "
                                        "first (a room with pinned feeds, spotlights, a grid layout or a split camera is kept open)" % KEPT_MAX)
@@ -6755,6 +6824,23 @@ class AuthService:
                             pass
                     else:
                         self._reply(obj, code)
+                elif path == "/api/meetings/ics":      # 0.21.96: a meeting's calendar file (a calendar app's subscription link)
+                    qs = parse_qs(urlparse(self.path).query)
+                    obj, code, fname = svc.meetings_ics_get(qs)
+                    if isinstance(obj, (bytes, bytearray)):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+                        self.send_header("Content-Disposition", 'attachment; filename="%s"' % re.sub(r'[^A-Za-z0-9._-]', "", fname or "meeting.ics"))
+                        self.send_header("Content-Length", str(len(obj)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self.end_headers()
+                        try:
+                            self.wfile.write(obj)
+                        except OSError:
+                            pass
+                    else:
+                        self._reply(obj, code)
                 elif path == "/api/templates/deck":    # 0.21.92: a template deck's file (a read grant; fed=1: a hub copying the decks)
                     qs = parse_qs(urlparse(self.path).query)
                     obj, code = svc.tpl_deck_get(qs, self.headers.get("Authorization"), self._peer())
@@ -6883,6 +6969,10 @@ class AuthService:
                     obj, code = svc.templates_api(p, self.headers.get("Authorization"), self._peer())
                     hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
                     self._reply(obj, code, hdrs)
+                elif path == "/api/meetings":          # 0.21.96: scheduled meetings (list, save, occ, cancel, ics, link, beat, end)
+                    obj, code = svc.meetings_api(p, self.headers.get("Authorization"), self._peer())
+                    hdrs = {"Retry-After": obj.get("retryAfter", 30)} if code == 429 else None
+                    self._reply(obj, code, hdrs)
                 elif path == "/api/templates/fed":     # 0.21.92: deck keys for a hub copying the decks (hand-over / standby)
                     obj, code = svc.tpl_fed_api(p, self.headers.get("Authorization"))
                     self._reply(obj, code)
@@ -6974,6 +7064,7 @@ class AuthService:
         self._board_mirror_load()
         threading.Thread(target=self._board_loop, daemon=True).start()
         threading.Thread(target=self._lib_loop, daemon=True).start()   # 0.21.84: the stream library (push / age the catalogue)
+        threading.Thread(target=self._meet_loop, daemon=True).start()   # 0.21.96: scheduled meetings (old ones go, ended rooms close)
 
     def close(self):
         try:
@@ -7202,6 +7293,23 @@ class AuthService:
             return self._acc_fed(p)
         if op in P_FED_OPS:   # 0.21.78: My room shared -- a spoke checked the member's token with its own key and says so in `vouch`
             return self._p_fed(op, p)
+        if op == "meet":      # 0.21.96: scheduled meetings -- the spoke checked the member's token and says what it found in `vouch`
+            v = p.get("vouch") if isinstance(p.get("vouch"), dict) else {}
+            if not HOST_RE.match(str(v.get("host") or "")) or not SLUG_RE.match(str(v.get("room") or "")):
+                return {"ok": False, "error": "the spoke must vouch for a member's device"}, 403
+            return self._meet_hub(p.get("body") if isinstance(p.get("body"), dict) else {}, v, time.time())
+        if op == "meetJudge":   # 0.21.96: may this person (or this link's guest) be in a meeting's room now? (a spoke's mint)
+            room, host = str(p.get("room") or ""), str(p.get("host") or "")
+            if not SLUG_RE.match(room) or not HOST_RE.match(host):
+                return {"ok": False, "error": "bad meeting room or device"}, 400
+            verdict, info = self._meet_judge(room, str(p.get("mid") or "")[:16], personal_name(p.get("pname")),
+                                             str(p.get("pcode") or "")[:PERSONAL_CODE_MAX], host, str(p.get("inv") or "")[:16], time.time())
+            return {"ok": verdict == "ok", "verdict": verdict, "info": info}, 200
+        if op == "meetIcs":   # 0.21.96: a calendar link fetched from a spoke
+            obj, code, fname = self.meetings_ics_get({"m": [str(p.get("id") or "")], "k": [str(p.get("k") or "")]}, fed=True)
+            if isinstance(obj, (bytes, bytearray)):
+                return {"ok": True, "text": obj.decode("utf-8"), "name": fname}, 200
+            return obj, code
         if op == "tpl":       # 0.21.92: meeting templates -- the spoke checked the member's token (and any proofs) and says so in `vouch`
             v = p.get("vouch") if isinstance(p.get("vouch"), dict) else {}
             if not HOST_RE.match(str(v.get("host") or "")) or not SLUG_RE.match(str(v.get("room") or "")):
@@ -7412,6 +7520,8 @@ class AuthService:
         wait = self.locked_for(peer)
         if wait:
             return {"error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        if is_meet_room(slug):   # 0.21.96: a scheduled meeting's own room -- the hub decides every mint (invited, inside a window)
+            return self._meet_token(p, slug, host, peer)
         rec = self.store.room(slug)
         # 0.21.75: My room (me-<12 hex>): its personal code is its room code; never a delegated access code; a spoke asks the hub
         personal = is_personal(slug) and (rec is None or is_personal_rec(rec))
@@ -7432,6 +7542,13 @@ class AuthService:
                 return out, code
             if verdict != "ok":
                 return {"ok": False, "admit": verdict, "error": kastr_access.REFUSED.get(verdict, "refused")}, 403
+        # 0.21.96: a scheduled meeting held in this (existing) room -- its invitees come in for its windows without its codes
+        meet_row = meet_soft = None
+        if (isinstance(p.get("meet"), dict) and p.get("invite") in (None, "") and admit in (None, "") and not personal
+                and slug != LOBBY_SLUG and not box_guest):
+            meet_row, meet_refusal, meet_soft = self._meet_pass(p, slug, host, peer)
+            if meet_refusal is not None:
+                return meet_refusal
         inv_row = None
         invite = p.get("invite")
         if invite not in (None, ""):
@@ -7456,6 +7573,8 @@ class AuthService:
             if b:
                 return self._ban_refusal(b, slug)
             role = "publisher"
+        elif meet_row is not None:
+            role = "publisher"   # 0.21.96: invited to the meeting on now -- a publisher, never an admin (no code was typed)
         elif self.store.configured():
             if self.store.check("publisher", access):
                 role = "publisher"
@@ -7466,15 +7585,15 @@ class AuthService:
             elif rec is not None and not personal and _room_code_ok(rec, access):
                 role, rc = "publisher", access     # the room's creator (a publisher) delegated its code
             else:
-                return self._fail(peer, "wrong access code", slug)
+                return meet_soft or self._fail(peer, "wrong access code", slug)   # 0.21.96: an invitee early / waiting hears that
             if rec is not None and rec.get("hash") and not personal and adm_row is None and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked; 0.21.89: let in
-                return self._fail(peer, "wrong room code", slug)
+                return meet_soft or self._fail(peer, "wrong room code", slug)
         else:
             # Legacy (secured, no codes yet): today's behaviour, so a fleet
             # update cannot lock a working relay out. Relay.start logs it.
             role = "publisher"
             if rec is not None and rec.get("hash") and not personal and adm_row is None and not _room_code_ok(rec, rc):   # 0.12.0: a kept room may be unlocked; 0.21.89: let in
-                return self._fail(peer, "wrong room code", slug)
+                return meet_soft or self._fail(peer, "wrong room code", slug)
         if box_guest and role in ("publisher", "admin"):
             role = "viewer"   # 0.21.84: until now only the page kept people out of a box's home room
         if role == "admin" and host:   # 0.21.92 I: remove / ban -- this device is a fleet admin's (a My room owner can't remove it)
@@ -7483,7 +7602,7 @@ class AuthService:
             role = "viewer" if "viewer" in (role, adm_row.get("role")) else "publisher"
         if personal:   # 0.21.78: its owner (the personal code), or a guest (people with access / an invite) while the owner is in
             return self._personal_token(slug, role, rc, host, inv_row, peer, admit=adm_row)
-        if inv_row is None and adm_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code; 0.21.89: nor a grant
+        if inv_row is None and adm_row is None and meet_row is None and rec is None and slug != "main" and self._hub_base():   # 0.21.75: an invite needs no room code; 0.21.89: nor a grant
             # 0.21.17 (B1): the lock may live at the hub (it was registered there, or mirrored from another spoke)
             hv = self.hub_room(slug, rc if rc is not None else "")
             if hv == "wrong":
@@ -7504,6 +7623,14 @@ class AuthService:
         if adm_row is not None:   # 0.21.89: a grant's token is short -- the page re-mints while the grant lives (this visit)
             inv_claim = dict(inv_claim, acc=adm_row["id"])
             exp = min(exp, now + kastr_access.TOKEN_TTL)
+        if meet_row is not None:   # 0.21.96: let in for a meeting -- the token ends with its window (the page re-mints while it lasts)
+            inv_claim = dict(inv_claim, mt=str(meet_row.get("id") or ""), mn=str(meet_row.get("nk") or "")[:48])
+            if meet_row.get("role") in ("org", "pres"):
+                inv_claim["mh"] = 1
+            try:
+                exp = min(exp, max(now + 1800, int(meet_row.get("end") or 0) + 3600))
+            except (TypeError, ValueError):
+                exp = min(exp, now + 1800)
         if slug == LOBBY_SLUG:   # 0.21.60: the Lobby -- presence only, whatever the code's role
             puts = ([STATE_PREFIX + "/" + slug + "/" + host] if host else []) + [PRESENCE_KIND + "/" + slug]
             lc = {"root": "", "get": slug, "put": puts, "lobby": 1, "iat": now, "exp": exp}
@@ -10335,6 +10462,657 @@ class AuthService:
         except ValueError:
             return {"ok": False, "error": "the hub answered oddly"}, 502
 
+    # ---- 0.21.96 (Kenton, 2026-10-28: "templates to also be setup to configure a webmeeting, like a teams meeting. Where I can
+    # schedule it for a weekly/daily meeting, or just a 1 time meeting"; 2026-10-30: "add scheduled meetings to the next update"):
+    # SCHEDULED MEETINGS. kastr_meetings keeps them (store.meetbook, the hub's; carried in the records bundle like the templates).
+    # POST /api/meetings {op, ...} with Bearer = any member token (the Lobby's too): the relay the page calls checks it; a spoke
+    # forwards to the hub (rooms_fed op "meet") vouching for what it checked. WHO a page is: the person proven like a personal
+    # template (name + My room code -- wrong codes count toward this relay's lockout --, My room's owner token, a device that
+    # unlocked their messages) or the meeting token of the meeting room it is in. A meeting's OWN room (mt-<12 hex>) is minted by
+    # _meet_token only: its invited people (proven) and its link guests, inside its windows, never a public announce (hidden
+    # like My room). A meeting in an existing room lets its invitees in for its windows without that room's codes (_meet_pass).
+    MEET_OPS = ("list", "get", "save", "occ", "cancel", "delete", "ics", "icsLink", "link", "beat", "end")
+    MEET_OLD_HUB = "the hub runs an older KASTR without scheduled meetings -- update the hub first"
+    MEET_REFUSED = {"none": "this meeting no longer exists", "cancelled": "this meeting was cancelled",
+                    "early": "this meeting has not started yet -- its room opens 10 minutes before the start",
+                    "over": "this meeting is over", "wait": "waiting for the host to join",
+                    "notInvited": "you are not invited to this meeting",
+                    "who": "this is a scheduled meeting -- join it from Meetings (your name and My room code say who you are)",
+                    "locked": "type your My room code to join this meeting", "wrong": "wrong name or My room code",
+                    "old": "the hub runs an older KASTR without scheduled meetings -- update the hub first"}
+    MEET_URL_RE = re.compile(r"^https?://[^\s\"'<>]{1,300}$")
+
+    def _meetb(self):
+        return getattr(self.store, "meetbook", None)
+
+    def _meet_mem(self):
+        m = self.__dict__.get("_meetmem")
+        if m is None:
+            with _XS_INIT_LOCK:
+                m = self.__dict__.setdefault("_meetmem", {"live": {}, "seen": {}, "lease": {}, "applied": {}})
+        return m
+
+    def _meet_live(self, room, now, put=None):
+        """Hub memory: who is in a meeting's room -> {n, hostIn, occupied}. put=(host, is_host) records a page's beat. `occupied`:
+        someone is in, or was within kastr_meetings.EMPTY_S (a reload, a dropped connection) -- the window stays open."""
+        M = kastr_meetings
+        mem = self._meet_mem()
+        with self.lock:
+            d = mem["live"].get(room) or {}
+            if put:
+                d[put[0]] = (now, bool(put[1]))
+            for h in [h for h, x in d.items() if now - x[0] > M.LIVE_S]:
+                d.pop(h, None)
+            if d:
+                mem["live"][room] = d
+                mem["seen"][room] = now
+            else:
+                mem["live"].pop(room, None)
+            seen = mem["seen"].get(room)
+            if seen is not None and now - seen > 6 * 3600:
+                mem["seen"].pop(room, None)
+                seen = None
+            return {"n": len(d), "hostIn": any(x[1] for x in d.values()),
+                    "occupied": bool(d) or (seen is not None and now - seen < M.EMPTY_S)}
+
+    def _meet_room_ensure(self, m):
+        """A meeting's own room has its record on the hub (kept: its chat and files stay between occurrences; hidden: never in
+        the rooms list) -- made at save, made again when an admin closed it and the meeting meets again."""
+        st = self.store
+        with st.lock:
+            cur = st.rooms.get(m["room"])
+            if cur is not None and cur.get("meeting") == m["id"]:
+                return False
+        now = time.time()
+        st.put_room(m["room"], {"meeting": m["id"], "persistent": True, "salt": "", "hash": "", "roomKey": os.urandom(16).hex(),
+                                "creator": m["org"]["name"], "created": now, "at": now})
+        return True
+
+    def _meet_close(self, room, why):
+        """A meeting's own room goes (cancelled, a one-time meeting ended, the series is over): record, invites and chat."""
+        if not kastr_meetings.is_room(room) or self.store.room(room) is None:
+            return False
+        self.store.close_room(room, why="meet")
+        hook = ROOM_CLOSE_HOOK[0]
+        if hook is not None:
+            try:
+                hook(room)
+            except Exception as e:
+                self.log("relay: meeting room %s closed but its chat could not be removed: %s" % (room, e))
+        with self.lock:
+            mem = self._meet_mem()
+            mem["live"].pop(room, None)
+            mem["seen"].pop(room, None)
+            mem["lease"].pop(room, None)
+        self.log("relay auth: meeting room %s closed (%s)" % (room, why))
+        return True
+
+    def _meet_lease(self, m, key, room, host, now):
+        """The first invitee (not a guest) in an occurrence applies the meeting's template: a short lease names that device, so
+        two pages arriving together do not both apply it. Hub memory (a restart may apply it once more)."""
+        mem = self._meet_mem()
+        k = (m["id"], key)
+        with self.lock:
+            if k in mem["applied"]:
+                return False
+            cur = mem["lease"].get(room)
+            if cur and cur["k"] == k and cur["host"] != host and now - cur["at"] < MEET_LEASE_S:
+                return False
+            mem["lease"][room] = {"k": k, "host": host, "tid": m["tpl"], "at": now}
+        self._tpl_applied_to(m["tpl"], room, now, put=True)
+        return True
+
+    def _meet_tpl_lease(self, room, host, tid, now):
+        """templates_api: is this device the one applying meeting room `room`'s template now?"""
+        mem = self._meet_mem()
+        with self.lock:
+            cur = mem["lease"].get(room)
+            return bool(cur and cur["host"] == host and cur["tid"] == tid and now - cur["at"] < 3 * MEET_LEASE_S)
+
+    def _meet_applied(self, room, now):
+        mem = self._meet_mem()
+        with self.lock:
+            cur = mem["lease"].pop(room, None)
+            if cur:
+                mem["applied"][cur["k"]] = now
+            for k in [k for k, at in mem["applied"].items() if now - at > 2 * 86400]:
+                mem["applied"].pop(k, None)
+
+    def _meet_judge(self, room, mid, pname, pcode, host, inv_id, now):
+        """Hub: may this person (or a link guest -- inv_id, a link the relay asked about already checked) be in meeting room
+        `room` now? -> (verdict, info). verdict: ok | wait | early | over | cancelled | notInvited | who | locked | wrong | none."""
+        M = kastr_meetings
+        book = self._meetb()
+        if book is None:
+            return "none", {}
+        m = book.by_room(room) if M.is_room(room) else (book.get(mid) if M.MID_RE.match(str(mid or "")) else None)
+        if m is None or m["room"] != room:
+            return "none", {}
+        info = {"id": m["id"], "title": m["title"], "org": m["org"]["name"], "host": bool(m.get("host"))}
+        if m.get("cancelled"):
+            return "cancelled", info
+        if inv_id:
+            st = self.store.invite_state(inv_id) if hasattr(self.store, "invite_state") else None
+            if not m["own"] or not m.get("guests") or not st or st["room"] != room or st["state"] in ("revoked", "expired"):
+                return "notInvited", info
+            role, nk, name = "guest", "", ""
+        else:
+            ident, ierr = self._tpl_ident({"pname": pname, "pcode": pcode}, {"host": host, "room": room})
+            if ierr:
+                return ("wrong" if ierr[0].get("wrong") else "locked"), info
+            if not ident:
+                return "who", info
+            role, nk, name = M.role_of(m, ident["nk"]), ident["nk"], ident["name"]
+            if not role:
+                return "notInvited", info
+        live = self._meet_live(room, now)
+        o = M.window(m, now, live["occupied"])
+        if o is None:
+            nx = M.next_occ(m, now)
+            if nx:
+                info["next"] = {"start": nx["start"], "end": nx["end"], "opens": nx["start"] - M.EARLY_S, "title": nx["title"]}
+                return "early", info
+            return "over", info
+        info.update(key=o["key"], start=o["start"], end=o["end"], title=o["title"], role=role, name=name, nk=nk)
+        if m.get("host") and role not in ("org", "pres") and not live["hostIn"]:
+            return "wait", info
+        if m["own"]:
+            self._meet_room_ensure(m)
+        if m.get("tpl") and role != "guest" and self._meet_lease(m, o["key"], room, host, now):
+            info["apply"] = m["tpl"]
+        return "ok", info
+
+    def _meet_judge_any(self, room, mid, pname, pcode, host, inv_id, now):
+        """The judge here (the hub) or at the hub (a spoke: fail closed)."""
+        if not self._p_spoke():
+            return self._meet_judge(room, mid, pname, pcode, host, inv_id, now)
+        r = self._hub_fed({"op": "meetJudge", "room": room, "mid": str(mid or ""), "pname": pname, "pcode": pcode,
+                           "host": host or "", "inv": inv_id or ""}, timeout=8)
+        if r is None:
+            return "down", {}
+        d, code = r
+        if code == 400 and d.get("error") == "bad room":
+            return "old", {}
+        v = str(d.get("verdict") or "")
+        if v not in self.MEET_REFUSED and v != "ok":
+            return "down", {}
+        return v, (d.get("info") if isinstance(d.get("info"), dict) else {})
+
+    def _meet_creds(self, p):
+        mp = p.get("meet") if isinstance(p.get("meet"), dict) else {}
+        return (str(mp.get("id") or "")[:16], personal_name(mp.get("pname"))[:48], str(mp.get("pcode") or "")[:PERSONAL_CODE_MAX])
+
+    def _meet_refusal(self, verdict, info, peer, slug):
+        if verdict == "down":
+            return {"ok": False, "hubDown": True, "error": "meetings live on the hub, which is unreachable -- try again shortly"}, 503
+        if verdict == "old":
+            return {"ok": False, "old": True, "error": self.MEET_OLD_HUB}, 501
+        if verdict == "wrong":
+            out, code = self._fail(peer, "wrong name or My room code", slug, what="meeting")
+            out.update(ok=False, meet=dict(info, verdict="wrong"))
+            return out, code
+        return {"ok": False, "meet": dict(info, verdict=verdict), "error": self.MEET_REFUSED.get(verdict, "refused")}, 403
+
+    def _meet_token(self, p, slug, host, peer):
+        """token() for a meeting's own room (mt-...): an invited person (proven -- `meet` {pname, pcode}) or a guest with the
+        meeting's link, inside a window -> a hidden-room token like a My room guest's: media, room.json and chat under their own
+        host, never a public kind (no ~presence / ~state / registry). Refusals carry `meet` (the page's lobby: early, wait)."""
+        if not host:
+            return {"ok": False, "error": "a meeting page must name its device (update KASTR)"}, 400
+        inv_row = None
+        invite = p.get("invite")
+        if invite not in (None, ""):
+            verdict, inv_row = self._invite_verify(str(invite), slug, host)
+            if verdict == "down":
+                return {"ok": False, "hubDown": True, "error": "the hub could not be asked about this invite link -- try again shortly"}, 503
+            if verdict == "wrong" or (verdict == "ok" and not inv_row):
+                out, code = self._fail(peer, "wrong invite link", slug, what="invite")
+                out.update(ok=False, invite="wrong")
+                return out, code
+            if verdict != "ok":
+                return {"ok": False, "invite": verdict, "error": INVITE_REFUSED.get(verdict, "refused")}, 403
+            if inv_row.get("room") != slug:
+                return {"ok": False, "invite": "room", "error": "this invite link is for room %s" % inv_row.get("room")}, 403
+            b = self.bans.hit(slug, None, None, inv=inv_row.get("id")) if self.bans else None
+            if b:
+                return self._ban_refusal(b, slug)
+        _mid, pname, pcode = self._meet_creds(p)
+        if inv_row is None and not pname:
+            return {"ok": False, "meet": {"verdict": "who"}, "error": self.MEET_REFUSED["who"]}, 403
+        now = time.time()
+        verdict, info = self._meet_judge_any(slug, "", "" if inv_row else pname, "" if inv_row else pcode, host,
+                                             inv_row["id"] if inv_row else "", now)
+        if verdict != "ok":
+            return self._meet_refusal(verdict, info, peer, slug)
+        self._ok(peer)
+        now = int(now)
+        try:
+            end = int(info.get("end") or 0)
+        except (TypeError, ValueError):
+            end = 0
+        exp = min(now + TOKEN_TTL, max(now + 1800, end + 3600))
+        cl = {"root": "", "get": slug, "put": [slug + "/" + host], "ph": host, "mt": str(info.get("id") or ""), "iat": now, "exp": exp}
+        if inv_row:
+            cl["inv"] = inv_row["id"]
+        else:
+            cl["mn"] = str(info.get("nk") or "")[:48]
+            if info.get("role") in ("org", "pres"):
+                cl["mh"] = 1
+        member = _mint(self.key, cl)
+        pub = {k: info.get(k) for k in ("id", "title", "org", "key", "start", "end", "role", "host", "apply") if info.get(k) is not None}
+        out = {"ok": True, "exp": exp, "role": "publisher", "ns": NS, "meet": pub, "guest": bool(inv_row), "tokens": {"member": member}}
+        if inv_row:
+            out["invite"] = {"id": inv_row["id"], "room": inv_row["room"], "exp": inv_row.get("exp")}
+        self.log("relay auth: %s joined meeting %s (%s)%s (from %s)" % (host, info.get("id"), slug, " as a link guest" if inv_row else "",
+                                                                      peer or "?"))
+        return out, 200
+
+    def _meet_pass(self, p, slug, host, peer):
+        """token(): a meeting held in an EXISTING room -- its invitees come in for its windows without that room's codes.
+        -> (row | None, refusal | None, soft): row {id, end, ...} lets them in as a publisher; a proven invitee who is early or
+        waiting gets `soft` (said instead of a wrong-code refusal when they have no code of their own)."""
+        mid, pname, pcode = self._meet_creds(p)
+        if not kastr_meetings.MID_RE.match(mid) or not pname or not host:
+            return None, None, None
+        verdict, info = self._meet_judge_any(slug, mid, pname, pcode, host, "", time.time())
+        if verdict == "ok":
+            return info, None, None
+        if verdict in ("wrong", "down", "old"):
+            return None, self._meet_refusal(verdict, info, peer, slug), None
+        if verdict in ("early", "wait"):
+            return None, None, self._meet_refusal(verdict, info, peer, slug)
+        return None, None, None
+
+    def _meet_pub(self, m, now, nk="", manage=False):
+        M = kastr_meetings
+        live = self._meet_live(m["room"], now)
+        out = M.public(m, now, nk, manage, live)
+        o = M.window(m, now, live["occupied"])
+        if o and not m.get("cancelled"):
+            out["open"] = {"key": o["key"], "start": o["start"], "end": o["end"]}
+        return out
+
+    def _meet_sees(self, m, v, ident):
+        if ident and kastr_meetings.role_of(m, ident["nk"]):
+            return True
+        if (v.get("meet") or {}).get("mid") == m["id"]:
+            return True   # in its room (a link guest too)
+        return not m["own"] and bool(v.get("adminAny") or (v.get("admin") and v.get("room") == m["room"]))
+
+    def _meet_edits(self, m, v, ident, p):
+        if ident and ident["nk"] == m["org"]["nk"]:
+            return True
+        if m["own"]:
+            return False
+        if v.get("adminAny") or (v.get("admin") and v.get("room") == m["room"]):
+            return True
+        rec = self.store.room(m["room"]) or {}
+        return bool(p.get("roomKey")) and str(p.get("roomKey")) == str(rec.get("roomKey") or "")
+
+    def _meet_hosts(self, m, v, ident):
+        """End the meeting, copy its guest link: the organizer, its presenters (proven, or by their meeting token)."""
+        mt = v.get("meet") or {}
+        if mt.get("mid") == m["id"] and mt.get("host"):
+            return True
+        return bool(ident) and kastr_meetings.role_of(m, ident["nk"]) in ("org", "pres")
+
+    def meetings_api(self, p, bearer, peer=""):
+        """POST /api/meetings -> (reply, code). See kastr_meetings for what a meeting is."""
+        p = p if isinstance(p, dict) else {}
+        claims = self._member_claims(bearer)
+        if claims is None:
+            return {"ok": False, "error": "join a room or the Lobby first (a member token is required)"}, 403
+        room, host = claims_identity(claims)
+        if not room or not host or not SLUG_RE.match(room) or claims.get("vehicle"):
+            return {"ok": False, "error": "this page's token names no device -- rejoin the room"}, 403
+        op = str(p.get("op") or "")
+        if op not in self.MEET_OPS:
+            return {"ok": False, "error": "unknown op (%s)" % "|".join(self.MEET_OPS)}, 400
+        now = time.time()
+        if self.bans and self.bans.hit(room, host, peer, now) and op != "beat":
+            return {"ok": False, "error": self.REVOKED_TEXT}, 403
+        coded = bool(p.get("pcode"))
+        if coded:
+            wait = self.lockout.locked_for(peer)
+            if wait:
+                return {"ok": False, "error": "too many attempts -- try again in %d s" % wait, "retryAfter": wait}, 429
+        guest = bool(claims.get("inv") or claims.get("pg"))
+        v = {"room": room, "host": host, "guest": guest, "lobby": bool(claims.get("lobby")) or room == LOBBY_SLUG,
+             "admin": bool(claims_admin(claims, room)) and not guest, "adminAny": bool(claims_admin_any(claims)) and not guest,
+             "personal": bool(claims.get("personal")) and is_personal(room), "by": clean_label(p.get("by"), 40)}
+        if claims.get("mt"):
+            v["meet"] = {"mid": str(claims.get("mt"))[:16], "nk": str(claims.get("mn") or "")[:48], "host": bool(claims.get("mh"))}
+        body = dict(p)
+        if not self._p_spoke():
+            out, code = self._meet_hub(body, v, now)
+        else:
+            r = self._hub_fed({"op": "meet", "vouch": v, "body": body}, timeout=15)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable -- meetings live on the hub; try again shortly"}, 503
+            out, code = r
+            if code == 400 and out.get("error") == "bad room":
+                return {"ok": False, "old": True, "error": self.MEET_OLD_HUB}, 501
+        if coded:
+            if code == 403 and out.get("wrong"):
+                o2, c2 = self.lockout.fail(peer, "wrong name or My room code", personal_name(p.get("pname")), what="meetings of")
+                out = dict(out, error=o2.get("error") or out.get("error"))
+                if c2 == 429:
+                    return dict(o2, ok=False, wrong=True), 429
+            elif code == 200:
+                self.lockout.ok(peer)
+        return out, code
+
+    def _meet_hub(self, p, v, now=None):
+        """The hub's side of every meetings call (`v`: what the relay the page called checked)."""
+        M = kastr_meetings
+        now = time.time() if now is None else now
+        book = self._meetb()
+        if book is None:
+            return {"ok": False, "error": "no meeting store here"}, 503
+        p = p if isinstance(p, dict) else {}
+        op = str(p.get("op") or "")
+        ident, ierr = (None, None)
+        if p.get("pname") or v.get("personal"):
+            ident, ierr = self._tpl_ident(p, v)
+        if ierr and ierr[0].get("wrong"):
+            return ierr
+        nk = ident["nk"] if ident else ""
+        if op == "list":
+            rows = [self._meet_pub(m, now, nk, self._meet_edits(m, v, ident, p))
+                    for m in book.all() if self._meet_sees(m, v, ident)]
+            rows.sort(key=lambda r: ((r.get("next") or {}).get("start") or 1 << 40, r["title"].lower()))
+            out = {"ok": True, "now": int(now), "me": ident["name"] if ident else None, "meetings": rows,
+                   "can": {"own": bool(ident), "room": bool(v.get("admin") and not v.get("lobby") and not is_personal(v["room"])
+                                                             and not M.is_room(v["room"])),
+                           "any": bool(v.get("adminAny"))},
+                   "limits": {"people": M.PEOPLE_MAX, "early": M.EARLY_S, "remind": M.REMIND_S}}
+            if ierr:
+                out["mineError"] = ierr[0].get("error")
+                out["locked"] = True
+            return out, 200
+        if op == "save":
+            return self._meet_save(p, v, ident, ierr, now)
+        if op == "beat":
+            return self._meet_beat(p, v, ident, now)
+        mid = str(p.get("id") or "")
+        m = book.get(mid) if M.MID_RE.match(mid) else None
+        if m is None:
+            return {"ok": False, "error": "no such meeting"}, 404
+        if not self._meet_sees(m, v, ident):
+            if ierr:
+                return ierr
+            return {"ok": False, "error": "that meeting is not yours to see"}, 403
+        if op == "get":
+            return {"ok": True, "meeting": self._meet_pub(m, now, nk, self._meet_edits(m, v, ident, p))}, 200
+        if op == "ics":
+            ju = str(p.get("joinUrl") or "")
+            text = M.ics(m, now, ju if self.MEET_URL_RE.match(ju) else "", clean_label(p.get("hostName"), 60) or "KASTR")
+            return {"ok": True, "name": M.ics_name(m), "text": text}, 200
+        if op == "icsLink":
+            return {"ok": True, "path": "/api/meetings/ics?m=%s&k=%s" % (m["id"], M.ics_key(self.key, m["id"], m.get("gen") or 0))}, 200
+        if op == "link":
+            return self._meet_link(m, v, ident, now)
+        if op == "end":
+            return self._meet_end(m, v, ident, p, now)
+        if not self._meet_edits(m, v, ident, p):
+            return {"ok": False, "error": "only the organizer changes this meeting"
+                    + ("" if m["own"] else " (or an admin of room %s)" % m["room"])}, 403
+        if op == "occ":
+            key = str(p.get("key") or "")
+            if m["freq"] == "once" or not M.has_original(m, key):
+                return {"ok": False, "error": "no such occurrence of this meeting"}, 400
+            ex = dict(m.get("ex") or {})
+            if p.get("restore"):
+                ex.pop(key, None)
+            elif p.get("cancel"):
+                ex[key] = {"cancel": 1}
+            else:
+                e = {}
+                w0, w = M.parse_wall(key), M.parse_wall(p.get("start"))
+                if p.get("start") not in (None, ""):
+                    if w is None or abs((w - w0).total_seconds()) > M.MOVE_MAX_S:
+                        return {"ok": False, "error": "an occurrence moves at most 31 days"}, 400
+                    e["start"] = M.wall_str(w)
+                if p.get("dur") not in (None, ""):
+                    e["dur"] = p.get("dur")
+                if M.txt(p.get("title"), M.TITLE_MAX):
+                    e["title"] = p.get("title")
+                if not e:
+                    return {"ok": False, "error": "nothing to change"}, 400
+                ex[key] = e
+            c, why, code = book.put(dict(m, ex=ex))
+            if c is None:
+                return {"ok": False, "error": why}, code
+            self.log("relay auth: meeting %s: occurrence %s %s by %s" % (m["id"], key, "restored" if p.get("restore") else
+                     "cancelled" if p.get("cancel") else "changed", v.get("by") or v.get("host")))
+            return {"ok": True, "meeting": self._meet_pub(c, now, nk, True)}, 200
+        if op == "cancel":
+            if m.get("cancelled"):
+                return {"ok": True, "meeting": self._meet_pub(m, now, nk, True)}, 200
+            c, why, code = book.put(dict(m, cancelled=int(now)))
+            if c is None:
+                return {"ok": False, "error": why}, code
+            self._meet_link_revoke(c)
+            if c["own"]:
+                self._meet_close(c["room"], "meeting %s cancelled" % c["id"])
+            self.log("relay auth: meeting %s '%s' cancelled by %s" % (c["id"], c["title"], v.get("by") or v.get("host")))
+            return {"ok": True, "meeting": self._meet_pub(c, now, nk, True)}, 200
+        if op == "delete":
+            if not m.get("cancelled") and not M.series_over(m, now):
+                return {"ok": False, "error": "cancel the meeting first"}, 409
+            book.delete(m["id"])
+            self._meet_link_revoke(m)
+            if m["own"]:
+                self._meet_close(m["room"], "meeting %s removed" % m["id"])
+            return {"ok": True, "deleted": m["id"]}, 200
+        return {"ok": False, "error": "unknown op"}, 400
+
+    def _meet_save(self, p, v, ident, ierr, now):
+        M = kastr_meetings
+        book = self._meetb()
+        d = p.get("meeting") if isinstance(p.get("meeting"), dict) else {}
+        mid = str(d.get("id") or "")
+        old = book.get(mid) if mid else None
+        if mid and old is None:
+            return {"ok": False, "error": "no such meeting"}, 404
+        if not ident:
+            return ierr or ({"ok": False, "locked": True, "error": "type your name and My room code to schedule a meeting"}, 403)
+        if v.get("guest"):
+            return {"ok": False, "error": "a guest cannot schedule meetings"}, 403
+        if old is not None:
+            if not self._meet_edits(old, v, ident, p):
+                return {"ok": False, "error": "only the organizer changes this meeting"}, 403
+            if old.get("cancelled"):
+                return {"ok": False, "error": "this meeting was cancelled -- schedule a new one"}, 409
+            room = old["room"]
+        else:
+            room = str(d.get("room") or "")
+            if room:
+                if (not SLUG_RE.match(room) or room == LOBBY_SLUG or personal_reserved(room) or reserved_slug(room, None)
+                        or room == LIB_ROOT):
+                    return {"ok": False, "error": "a meeting is held in its own room or in a shared room"}, 400
+                rec = self.store.room(room)
+                if rec is None:
+                    return {"ok": False, "error": "no such room: %s" % room}, 404
+                ok = v.get("adminAny") or (v.get("admin") and v.get("room") == room) or (
+                    bool(p.get("roomKey")) and str(p.get("roomKey")) == str(rec.get("roomKey") or ""))
+                if not ok:
+                    return {"ok": False, "error": "only an admin of room %s schedules a meeting in it" % room}, 403
+        tpl = str(d.get("tpl") or "")
+        if tpl and not (old and old.get("tpl") == tpl):
+            tb = self._tplb()
+            t = tb.get(tpl) if tb is not None and kastr_templates.TID_RE.match(tpl) else None
+            if t is None:
+                return {"ok": False, "error": "no such template"}, 400
+            if t.get("scope") == "me":
+                if t.get("owner") != ident["nk"]:
+                    return {"ok": False, "error": "a personal template is its owner's alone"}, 403
+            elif not (v.get("adminAny") or t.get("room") in (v.get("room"), room)):
+                return {"ok": False, "error": "use a template of this room, or one of your own"}, 403
+        m = {"id": mid or "m000000000000", "title": d.get("title"), "note": d.get("note"), "room": room,
+             "org": old["org"] if old else {"nk": ident["nk"], "name": ident["name"]},
+             "tz": d.get("tz"), "start": d.get("start"), "dur": d.get("dur"), "freq": d.get("freq"), "days": d.get("days"),
+             "until": d.get("until"), "tpl": tpl, "host": bool(d.get("host")), "guests": bool(d.get("guests")) and (not room or M.is_room(room)),
+             "people": d.get("people"), "ex": (old or {}).get("ex") or {}, "cancelled": 0, "by": v.get("by") or ident["name"],
+             "gen": (old or {}).get("gen") or 0, "linkId": (old or {}).get("linkId") or "", "created": (old or {}).get("created") or 0}
+        c0, why = M.clean_meeting(dict(m, room=room or "mt-000000000000"))
+        if c0 is None:
+            return {"ok": False, "error": why}, 400
+        if c0["freq"] == "once" and M.occurrence(c0, c0["start"])["end"] <= now and not old:
+            return {"ok": False, "error": "that time has passed -- pick a time to come"}, 400
+        c, why, code = book.put(m, new=old is None)
+        if c is None:
+            return {"ok": False, "error": why}, code
+        if c["own"]:
+            self._meet_room_ensure(c)
+        if old and old.get("guests") and not c.get("guests"):
+            self._meet_link_revoke(c)
+        self.log("relay auth: meeting %s '%s' %s by %s (%s, %s, %s)" % (c["id"], c["title"], "changed" if old else "scheduled",
+                 v.get("by") or ident["name"], c["freq"], c["room"], c["tz"]))
+        return {"ok": True, "meeting": self._meet_pub(c, now, ident["nk"], True)}, 200
+
+    def _meet_link(self, m, v, ident, now):
+        """op link: the meeting's guest link -- an invite token DERIVED from this hub's key (never stored: the invite store keeps
+        its digest, as for every link). It works while the meeting has a window to come; the judge lets its guests in only inside
+        one. A new hub (hand-over) derives another secret: the old link stops and the next copy says the link changed."""
+        M = kastr_meetings
+        if not m["own"]:
+            return {"ok": False, "error": "a meeting in a shared room uses that room's own invite links"}, 400
+        if not m.get("guests"):
+            return {"ok": False, "error": "this meeting takes no guests -- turn on Guests with a link first"}, 409
+        if m.get("cancelled") or M.series_over(m, now):
+            return {"ok": False, "error": "this meeting is over"}, 409
+        if not (self._meet_hosts(m, v, ident) or self._meet_edits(m, v, ident, {})):
+            return {"ok": False, "error": "the organizer and the presenters share the guest link"}, 403
+        le = M.last_end(m)
+        exp = int(min(now + 400 * 86400, (le if le else now + 90 * 86400) + 86400))
+        changed = False
+        for _ in range(2):
+            gen = int(m.get("gen") or 0)
+            lid, secret = M.link_id(self.key, m["id"], gen), M.link_secret(self.key, m["id"], gen)
+            r = self.store.invite_meet_put(m["room"], lid, hashlib.sha256(secret.encode("ascii")).hexdigest(), exp,
+                                           m["org"]["name"], m["id"])
+            if r == "clash":   # a link of the same id made with another key (a hand-over): a new generation
+                c, _why, _code = self._meetb().put(dict(m, gen=gen + 1))
+                if c is None:
+                    break
+                m, changed = c, True
+                continue
+            if r != "ok":
+                return {"ok": False, "error": r}, 409
+            if m.get("linkId") != lid:
+                c, _why, _code = self._meetb().put(dict(m, linkId=lid))
+                m = c or m
+            return {"ok": True, "token": "ki-%s-%s" % (lid, secret), "room": m["room"], "exp": exp, "changed": changed}, 200
+        return {"ok": False, "error": "the guest link could not be made"}, 500
+
+    def _meet_link_revoke(self, m):
+        if m.get("linkId"):
+            try:
+                self.store.invite_revoke(m["room"], m["linkId"])
+            except Exception:
+                pass
+
+    def _meet_beat(self, p, v, ident, now):
+        """op beat (every ~20 s, a page in a meeting's room): this device is in (the window stays open while someone is; the
+        host-required lobby learns the host is in) -> the meeting as it stands; `ended` when it was ended or cancelled."""
+        M = kastr_meetings
+        book = self._meetb()
+        room = v["room"]
+        mt = v.get("meet") or {}
+        if M.is_room(room):
+            ms = [x for x in [book.by_room(room)] if x]
+        else:
+            mid = str(p.get("id") or "")
+            ms = [x for x in book.in_room(room) if x["id"] == mid] if M.MID_RE.match(mid) else []
+        if not ms:
+            return {"ok": True, "none": True, "ended": M.is_room(room)}, 200
+        m = ms[0]
+        nk = ident["nk"] if ident else (mt.get("nk") if mt.get("mid") == m["id"] else "")
+        role = "guest" if v.get("guest") else M.role_of(m, nk)
+        is_host = (mt.get("mid") == m["id"] and bool(mt.get("host"))) or role in ("org", "pres")
+        if not m["own"] and not role and not v.get("admin") and not v.get("adminAny"):
+            return {"ok": True, "none": True}, 200
+        live = self._meet_live(room, now, put=(v["host"], is_host))
+        o = M.window(m, now, True)
+        out = {"ok": True, "id": m["id"], "title": m["title"], "live": live, "cancelled": bool(m.get("cancelled")),
+               "ended": bool(m.get("cancelled")) or o is None, "host": is_host}
+        if o:
+            out["occ"] = {"key": o["key"], "start": o["start"], "end": o["end"], "title": o["title"]}
+        return out, 200
+
+    def _meet_end(self, m, v, ident, p, now):
+        """op end: the organizer or a presenter ends the meeting now -- this occurrence is over (its room closes for the series'
+        next one; a one-time meeting's own room is deleted, as a template's room is at End)."""
+        M = kastr_meetings
+        if not (self._meet_hosts(m, v, ident) or self._meet_edits(m, v, ident, p)):
+            return {"ok": False, "error": "the organizer and the presenters end the meeting"}, 403
+        live = self._meet_live(m["room"], now)
+        o = M.window(m, now, True)
+        if o is None:
+            return {"ok": True, "ended": None}, 200
+        self._meetb().mark_done(m["id"], o["key"], now)
+        closed = False
+        if m["own"] and m["freq"] == "once":
+            closed = self._meet_close(m["room"], "meeting %s ended" % m["id"])
+        else:
+            with self.lock:
+                self._meet_mem()["live"].pop(m["room"], None)
+                self._meet_mem()["seen"].pop(m["room"], None)
+        self.log("relay auth: meeting %s '%s' ended (%s, %d in the room) by %s" % (m["id"], m["title"], o["key"], live["n"],
+                                                                                 v.get("by") or v.get("host")))
+        return {"ok": True, "ended": o["key"], "closed": closed}, 200
+
+    def meetings_ics_get(self, qs, fed=False):
+        """GET /api/meetings/ics?m=<id>&k=<key>: the meeting's calendar file for a calendar app's subscription (no sign-in: the
+        key in the link, derived from the hub's key, is the capability) -> (bytes, 200, file name) | (error reply, code, None).
+        A spoke fetches it from the hub (rooms_fed op "meetIcs")."""
+        M = kastr_meetings
+        mid = str((qs.get("m") or [""])[0])[:16]
+        k = str((qs.get("k") or [""])[0])[:64]
+        if not M.MID_RE.match(mid) or not re.match(r"^[0-9a-f]{32}$", k):
+            return {"ok": False, "error": "bad calendar link"}, 400, None
+        if self._p_spoke() and not fed:
+            r = self._hub_fed({"op": "meetIcs", "id": mid, "k": k}, timeout=10)
+            if r is None:
+                return {"ok": False, "hubDown": True, "error": "the hub is unreachable"}, 503, None
+            d, code = r
+            if code == 200 and isinstance(d.get("text"), str):
+                return d["text"].encode("utf-8"), 200, str(d.get("name") or "meeting.ics")
+            return d, code, None
+        m = self._meetb().get(mid) if self._meetb() is not None else None
+        if m is None or not hmac.compare_digest(k, M.ics_key(self.key, mid, m.get("gen") or 0)):
+            return {"ok": False, "error": "no such meeting (or the link changed)"}, 404, None
+        return M.ics(m, time.time()).encode("utf-8"), 200, M.ics_name(m)
+
+    def _meet_loop(self):
+        while not self._board_stop.wait(MEET_TICK_S):
+            try:
+                self.meet_tick()
+            except Exception as e:
+                self.log("relay auth: meetings tick: %s" % e)
+
+    def meet_tick(self, now=None):
+        """Hub: drop old meetings (their rooms go), close a one-time meeting's own room once it is over and empty, and the
+        room of a series that will not meet again."""
+        M = kastr_meetings
+        book = self._meetb()
+        if book is None or self._p_spoke():
+            return 0
+        now = time.time() if now is None else now
+        n = 0
+        for m in book.sweep(now):
+            if m["own"] and self._meet_close(m["room"], "meeting %s dropped" % m["id"]):
+                n += 1
+        for m in book.all():
+            if not m["own"] or m.get("cancelled") or self.store.room(m["room"]) is None:
+                continue
+            if self._meet_live(m["room"], now)["occupied"]:
+                continue
+            if M.series_over(m, now) and self._meet_close(m["room"], "meeting %s is over" % m["id"]):
+                n += 1
+        return n
+
     # ---- 0.21.92 (Kenton: meeting templates, phase 1 "by hand"): MEETING TEMPLATES -------------------------------------
     # kastr_templates keeps them (store.tplbook, the hub's; carried in the records bundle like the stream library) and plans
     # what an apply changes. POST /api/templates {op, ...} with Bearer = a member token of the room the page is in: the relay
@@ -10488,6 +11266,12 @@ class AuthService:
             return {"ok": False, "error": "templates belong to a room -- join one (not the Lobby)"}, 403
         rec, creator, admin, publisher = self._tpl_rights(p, v)
         personal_room = is_personal(room)
+        # 0.21.96: a scheduled meeting's template -- the device the meeting judge picked applies it in the meeting's room (whatever
+        # its rights there, the organizer chose it), and reads it to get its presentation ready
+        meet_lease = (op in ("get", "preview", "apply", "deckOpen", "presCo") and not v.get("guest")
+                      and self._meet_tpl_lease(room, v.get("host"), str(p.get("id") or ""), now))
+        if meet_lease:
+            admin = publisher = True
         ident, ierr = (None, None)
         if p.get("pname") or v.get("personal"):
             ident, ierr = self._tpl_ident(p, v)
@@ -10545,9 +11329,9 @@ class AuthService:
         t = book.get(tid) if T.TID_RE.match(tid) else None
         if t is None:
             return {"ok": False, "error": "no such template"}, 404
-        if t.get("scope") == "me" and ierr and not ident:
+        if t.get("scope") == "me" and ierr and not ident and not meet_lease:
             return ierr
-        if not self._tpl_sees(t, v, ident):
+        if not self._tpl_sees(t, v, ident) and not meet_lease:
             # 0.21.92: a room template just applied to THIS room (another room than its own) -- its named presenters and backstage
             # and this room's admins read it here to get its presentation ready (get / deckOpen / presCo only)
             if not (op in ("get", "deckOpen", "presCo") and t.get("scope") == "room" and self._tpl_applied_to(t["id"], room, now)
@@ -10560,7 +11344,10 @@ class AuthService:
         if op in ("preview", "apply"):
             if op == "apply" and v.get("guest"):
                 return {"ok": False, "error": "a guest can only look at templates"}, 403
-            return self._tpl_run(t, p, v, rec, creator, admin, publisher, op == "preview", now)
+            out, code = self._tpl_run(t, p, v, rec, creator, admin, publisher, op == "preview", now)
+            if meet_lease and op == "apply" and code == 200:
+                self._meet_applied(room, now)   # 0.21.96: this occurrence's template is in -- nobody applies it again
+            return out, code
         if op in ("deckOpen", "presCo"):
             # Kenton (2026-10-27): before it is presented, a room template's deck opens ONLY for the template's named presenters
             # and backstage (the person proven by name + My room code, My room's owner token, or a device that unlocked their
@@ -10726,6 +11513,9 @@ class AuthService:
         ran) is never closed here. Who: that run's presenters (proven -- name + My room code, My room's owner token, unlocked
         messages; never a name a page merely says), the room's creator (the device that made it) and admins."""
         room = v["room"]
+        mt = self._meetb().by_room(room) if is_meet_room(room) and self._meetb() is not None else None
+        if mt is not None:   # 0.21.96: End in a meeting's own room ends the meeting (a one-time meeting's room closes)
+            return self._meet_end(mt, v, ident, p, now)
         mk = rec.get("tpl") if isinstance(rec, dict) and isinstance(rec.get("tpl"), dict) else None
         if not mk or not mk.get("close"):
             return {"ok": False, "kept": True, "error": "this room was not made by a template to close when its presentation ends"}, 409
@@ -16604,6 +17394,11 @@ class Relay:
             changed = False
             if "store" in d:
                 rep["store"], changed = d["store"], True
+                try:   # 0.21.96: the standby keeps the meetings too (a hand-over then serves them at once)
+                    if self.auth is not None and isinstance((d["store"] or {}).get("meetings"), dict):
+                        self.auth.store.meetbook.import_(d["store"]["meetings"])
+                except Exception as e:
+                    self.log("relay federation: standby copy -- meetings: %s" % str(e)[:120])
                 try:   # 0.21.92: the standby keeps the template decks too (its own book lists them; the files follow in the background)
                     if self.auth is not None and isinstance((d["store"] or {}).get("templates"), dict):
                         self.auth.store.tplbook.import_(d["store"]["templates"])
@@ -17268,7 +18063,7 @@ class Relay:
         st = self.store.codes_status()
         st["configured"] = bool(st["viewer"] or st["publisher"])
         st["secured"] = bool(self.secured and self.running())
-        st["rooms"] = [s for s in self.store.room_slugs() if not is_personal(s)]   # 0.21.75: personal rooms are never listed
+        st["rooms"] = [s for s in self.store.room_slugs() if not is_personal(s) and not is_meet_room(s)]   # 0.21.75 (0.21.96: nor meetings')
         return st
 
     def set_codes(self, payload):

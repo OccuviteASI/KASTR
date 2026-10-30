@@ -361,7 +361,7 @@ class Page(unittest.TestCase):
     def test_who_is_listed(self):
         e = self.eo
         # public rooms: the rail's own presence, boxes and relays left out, never a personal room from there
-        self.assertIn("if (!w || !alive(p) || presenceHidden(w) || !ROOM_RE.test(p.slug) || isPersonalSlug(p.slug)) continue;", e)
+        self.assertIn("if (!w || !alive(p) || presenceHidden(w) || !ROOM_RE.test(p.slug) || isHiddenSlug(p.slug)) continue;", e)   # 0.21.96: + a meeting's room (mt-)
         self.assertIn("if (isHomeRoom(p.slug) && !(joined && p.slug === CHANNEL)) x.priv = true;", e)   # a box's own room is private
         # personal rooms: only what the relay host answers; a row without a personal slug stays private
         self.assertIn('const room = !s.private && isPersonalSlug(String(s.room || "")) ? String(s.room) : "";', e)

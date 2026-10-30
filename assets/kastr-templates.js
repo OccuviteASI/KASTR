@@ -995,6 +995,23 @@
     }
     refreshAll();
   }
+  // 0.21.96 (Kenton: scheduled meetings): a meeting's template, applied by the first invitee in (the hub's lease names this device and
+  // lets it apply as the room's admin, once per occurrence). Never my own view (the people in the meeting keep theirs); in a meeting's
+  // own room never its room settings or invites either (the meeting decides who is in).
+  async function autoApply(tid, slug, o = {}) {
+    if (!tid || !slug || K.room() !== slug) return { ok: false, error: "not in the room" };
+    const g = await call({ op: "get", id: tid }, slug);
+    if (!g.ok || !g.template) { T("meet-apply", { ok: false, why: "get" }); return { ok: false, error: g.error || "The template is gone." }; }
+    const t = g.template, on = { ...(t.on || {}) };
+    delete on.view;
+    if (o.meetingRoom) { delete on.settings; delete on.invites; }
+    const d = await call({ op: "apply", id: t.id, mode: "replace", on, choices: {}, live: K.live(), tokens: await proofs(t, slug), here: slug, presTo: presTo(t) }, slug);
+    T("meet-apply", { ok: d.ok, done: d.done, notes: (d.notes || []).length });
+    window.__tplMeet = { room: slug, id: t.id, ok: !!d.ok, at: Date.now() };   // rig (no token)
+    if (!d.ok) { toast("The meeting’s template “" + t.name + "” was not applied: " + (d.error || "refused"), 8000, "warn"); return d; }
+    applied(t, slug, d);
+    return d;
+  }
   async function undo(uid, slug, name) {
     const d = await call({ op: "undo", undo: uid }, slug);
     T("undo", { ok: d.ok, layout: d.layout, settings: d.settings });
@@ -1223,6 +1240,7 @@
   }
   window.__tplUI = {
     open: openList, save: openSave, apply: openApply, edit: openEdit, roomSettings, myRoom, canApplyTo, applyTo, available,
+    autoApply,   // 0.21.96: a scheduled meeting's template
     presReady, presCo, coState: () => [...CO].map(([id, c]) => ({ id, deny: c.deny.size, done: c.done.size })), ready: readyShow, presStart, presState: () => ({ tid: R.tid, loaded: !!R.file, size: R.file ? R.file.size : 0, busy: R.busy, err: R.err, shown: !!readyEl && !readyEl.hidden }),   // 0.21.92: presentation & roles
     state: () => ({ list: L.d ? { ok: L.d.ok, n: (L.d.templates || []).length, mine: L.d.mine ? L.d.mine.length : null, can: L.d.can } : null,
       apply: A.d ? { ok: A.d.ok, changes: A.d.changes, notes: A.d.notes, cams: A.d.cams, settings: A.d.settings, invites: A.d.invites } : null, trace: trace.slice(-40) }),

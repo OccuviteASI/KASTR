@@ -327,7 +327,7 @@ class Page(unittest.TestCase):
     def test_wiring(self):
         p = self.p
         self.assertIn("const PERSONAL_RE = /^me-[0-9a-f]{12}$/;", p)
-        self.assertIn('const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug) : String(slug || ""));', p)   # 0.21.78: someone else's reads "<owner>'s room"
+        self.assertIn('const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug)\n    : isMeetSlug(slug) ? (window.__kmeet?.title?.(slug) || "Meeting") : String(slug || ""));', p)   # 0.21.96: + a meeting's room (mt-)   # 0.21.78: someone else's reads "<owner>'s room"
         self.assertIn('<div id="sbMine" class="sbmine" hidden></div>', p)
         self.assertIn('id="optMyRoom"', p)
         self.assertIn('document.getElementById("optMyRoom").addEventListener("click", () => personalDialog());', p)
@@ -337,13 +337,13 @@ class Page(unittest.TestCase):
         self.assertIn("switchRoom({ slug: p.slug, personal: true }, p.code);", p)
         self.assertIn("try { personalCardPaint(); } catch {}   // 0.21.75", p)
         # other people's personal rooms never reach the rail
-        self.assertIn('.filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug)   // 0.21.75: never a personal room', p)
-        self.assertIn('slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75', p)
+        self.assertIn('.filter((r) => r.slug !== "main" && !isHiddenSlug(r.slug)   // 0.21.75: never a personal room', p)   # 0.21.96: + a meeting's room
+        self.assertIn('slug === "main" || isHiddenSlug(slug)) continue;   // 0.21.75', p)   # 0.21.96: + a meeting's room
         # nothing announced in My room: no registry, no ember, no public presence / state
-        self.assertIn('if (chan !== "main" && !isPersonalSlug(chan)) {', p)
-        self.assertIn('rec.slug === "main" || window.__isPersonalSlug?.(rec.slug)) return;   // 0.21.75: My room is never announced', p)
-        self.assertIn('&& !(isPersonalSlug(CHANNEL) && ["~presence", "~talking", "~chat"].includes(kind))', p)
-        self.assertIn('stateProducer(() => (isPersonalSlug(CHANNEL) ? "" : "~state/"', p)
+        self.assertIn('if (chan !== "main" && !isHiddenSlug(chan)) {', p)   # 0.21.96: + a meeting's room
+        self.assertIn('rec.slug === "main" || (window.__isHiddenSlug || window.__isPersonalSlug)?.(rec.slug)) return;   // 0.21.75: My room is never announced', p)   # 0.21.96: + a meeting's room
+        self.assertIn('&& !(isHiddenSlug(CHANNEL) && ["~presence", "~talking", "~chat"].includes(kind))', p)   # 0.21.96: + a meeting's room
+        self.assertIn('stateProducer(() => (isHiddenSlug(CHANNEL) ? "" : "~state/"', p)   # 0.21.96: + a meeting's room (mt-)
         self.assertIn("{ clear(key, true); return; }", p)
         # the owner arranges it; Pin to My room from other rooms (three menus + module 2's grid menu)
         self.assertIn("(authPersonal && isPersonalSlug(CHANNEL))", p)

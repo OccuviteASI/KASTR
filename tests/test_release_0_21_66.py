@@ -404,16 +404,16 @@ class FieldFixes(unittest.TestCase):
         i = self.p.index(start)
         return self.p[i:self.p.index(end, i)]
 
-    def test_denoise_context_has_no_output_device(self):
-        self.assertIn('denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive", sinkId: { type: "none" } });', self.p)
-        self.assertIn('catch { denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" }); }', self.p)
+    def test_denoise_context_back_on_the_device_clock(self):   # 0.21.95: sinkId none crackled (tests/test_release_0_21_95_rnnoise_clock.py)
+        self.assertIn('denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });', self.p)
+        self.assertNotIn('sinkId: { type: "none" }', self.p)
 
     def test_denoise_watchdog(self):
         g = self.sec("  function denoiseGuard(slot, ctx, src, node) {", "  function stopDenoise(")
         self.assertIn("frozen = t === lastT ? frozen + 1 : 0;", g)
         self.assertIn("Math.sqrt(e / ib.length) > 0.01 && mx < 1e-6", g)
         self.assertIn("if (slot.entry.micMuted)", g)
-        self.assertIn("if (!slot.dnRebuilt) {", g)
+        self.assertIn("if (!slot.dnRebuilt || performance.now() - slot.dnRebuilt > 60000) {", g)
         self.assertIn("denoiseFail(why);", g)
         self.assertIn("denoiseGuard(slot, d.ctx, src, node);", self.p)
         self.assertIn("clearInterval(slot.dnGuard); slot.dnGuard = null;   // 0.21.66", self.sec("  function stopDenoise(", "  function armDenoiseWatch("))

@@ -30183,7 +30183,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // ---- 0.13.1: background-noise removal (RNNoise) --------------------------------
   // mic -> RnnoiseWorkletNode (vendored @sapphi-red/web-noise-suppressor, assets/noise/)
   // -> MediaStreamDestination -> the element's audio.in.source (kind "voice" keeps Opus in
-  // voip mode). One 48 kHz context; the worklet buffers 480-sample frames (~40 ms). A
+  // voip mode). One 48 kHz context; the worklet buffers 480-sample frames (~10 ms each). A
   // watchdog re-injects when the library re-asserts a raw mic track (device switch,
   // constraint change). Any failure falls back to the browser's suppression WITH a toast --
   // never a control that looks on while nothing happens.
@@ -30191,11 +30191,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   async function ensureDenoise() {
     if (denoiseBroken) throw new Error(denoiseBroken);
     if (!denoiseCtx) {
-      // 0.21.66 (Kenton, Bluetooth headset: "When I turned on RNNoise filter no one could hear me at all"): the filter's
-      // context renders with NO output device (sinkId none) -- tied to the speakers it froze when a Bluetooth headset flipped
-      // to its call mode as the mic opened, and the processed track went silent with no error
-      try { denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive", sinkId: { type: "none" } }); }
-      catch { denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" }); }
+      // 0.21.95 (Kenton: "I'm still getting a crackling when using the background noise removal"): the filter's context is on
+      // the output device's clock again, the same clock as the publish library's capture context that reads its track. 0.21.66's
+      // sinkId none put it on a timer clock instead: it drifts against the capture (a 10 ms hole every few seconds) and on a busy
+      // machine it fell behind for good (lab: 27 s rendered in 40 s, ~900 holes = steady crackle). The Bluetooth freeze that
+      // sinkId none answered is the guard's job now: a stopped or drifting clock rebuilds the filter (denoiseGuard)
+      denoiseCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
       denoiseCtx.addEventListener("statechange", () => { if (denoiseCtx.state !== "running") denoiseCtx.resume().catch(() => {}); });
     }
     if (denoiseCtx.sampleRate !== 48000) throw new Error("the browser refused a 48 kHz audio context");
@@ -30300,22 +30301,25 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     inA.fftSize = outA.fftSize = 2048;
     try { src.connect(inA); node.connect(outA); } catch { return; }
     const ib = new Float32Array(inA.fftSize), ob = new Float32Array(outA.fftSize);
-    let lastT = ctx.currentTime, frozen = 0, silent = 0;
+    let lastT = ctx.currentTime, frozen = 0, silent = 0, off = 0, base = { t: ctx.currentTime, p: performance.now() };   // 0.21.95: off = drift
     slot.dnGuard = setInterval(() => {
       if (!slot.dn || micMode !== "rnnoise") { clearInterval(slot.dnGuard); return; }
-      if (slot.entry.micMuted) { frozen = silent = 0; lastT = ctx.currentTime; return; }
+      if (slot.entry.micMuted) { frozen = silent = off = 0; lastT = ctx.currentTime; base = { t: lastT, p: performance.now() }; return; }
       const t = ctx.currentTime;
       frozen = t === lastT ? frozen + 1 : 0; lastT = t;
+      // 0.21.95: a clock that runs but not at real time (3 % off for 10 s) starves or floods the capture that reads the track
+      const p = performance.now();
+      if (p - base.p >= 5000) { const rate = (t - base.t) / ((p - base.p) / 1000); off = Math.abs(rate - 1) > 0.03 ? off + 1 : 0; base = { t, p }; slot.dnRate = Math.round(rate * 1000) / 1000; }
       inA.getFloatTimeDomainData(ib); outA.getFloatTimeDomainData(ob);
       let e = 0, mx = 0;
       for (let i = 0; i < ib.length; i++) e += ib[i] * ib[i];
       for (let i = 0; i < ob.length; i++) mx = Math.max(mx, Math.abs(ob[i]));
       silent = Math.sqrt(e / ib.length) > 0.01 && mx < 1e-6 ? silent + 1 : 0;
-      if (frozen < 2 && silent < 3) return;
+      if (frozen < 2 && silent < 3 && off < 2) return;
       clearInterval(slot.dnGuard);
-      const why = frozen >= 2 ? "its audio clock stopped (the audio device changed?)" : "no sound came through it";
-      if (!slot.dnRebuilt) {
-        slot.dnRebuilt = true;
+      const why = frozen >= 2 ? "its audio clock stopped (the audio device changed?)" : off >= 2 ? "its audio clock ran at " + Math.round(slot.dnRate * 100) + "% of real time" : "no sound came through it";
+      if (!slot.dnRebuilt || performance.now() - slot.dnRebuilt > 60000) {   // 0.21.95: once a minute, not once a session (a headset flips again later)
+        slot.dnRebuilt = performance.now();
         log("Background noise removal: " + why + " — starting it again");
         if (!IS_WEB2) { try { nativePost("/api/rtsp/note", { text: "page: RNNoise " + why + " -- rebuilding the filter" }); } catch {} }
         stopDenoise(slot);

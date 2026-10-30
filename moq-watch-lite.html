@@ -952,6 +952,19 @@
     display:flex; align-items:center; gap:8px; }
   #shSwapNote[hidden] { display:none; }
   #shSwapNote span { flex:1; }
+  /* 0.21.96: locked shares -- Start on one whose window is gone asks for a pick here; the Lock switch; a stopped locked share */
+  #shRestartNote { margin:0 0 10px; padding:8px 10px; border:1px solid var(--asi-blue); border-radius:6px; color:var(--text); font-size:12.5px;
+    display:flex; align-items:center; gap:8px; }
+  #shRestartNote[hidden] { display:none; }
+  #shRestartNote span { flex:1; }
+  .camrow .lockw { flex:none; display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--text-dim); cursor:pointer; user-select:none; }
+  .pubui .camrow.parked { border-style:dashed; background:transparent; }
+  .pubui .camrow.parked .lbl { color:var(--text-dim); }
+  .pubui .camrow.parked .badge.stopped { background:transparent; border:1px solid var(--line); color:var(--text-mute); }
+  .pubui .camrow.parked .start { flex:none; height:auto; padding:2px 12px; font-size:11px; }
+  .pubui .camrow.parked .start:disabled { opacity:.55; cursor:default; }
+  .pubui .camrow.parked .pknote { font-size:11px; line-height:1.35; color:var(--text-mute); overflow-wrap:anywhere; }
+  #mineMenu .mi .misw { margin-left:auto; flex:none; pointer-events:none; }
   /* 0.7.8: transient notice chip (RTSP failures etc.) */
   /* 0.21.0: a toast is neutral; the level shows as an accent. Red is for errors ONLY (field: "all alerts come in red"). */
   #kToast { position:fixed; top:54px; left:50%; transform:translate(-50%, -8px); z-index:90;
@@ -2805,6 +2818,9 @@
     <!-- 0.21.73: "Share something else" -- the next screen / window / tab picked replaces the share in place -->
     <p id="shSwapNote" hidden><span>Pick what to share instead of <b id="shSwapName"></b> &mdash; it takes its place, nothing stops.</span>
       <button type="button" class="ghost" id="shSwapCancel">Cancel</button></p>
+    <!-- 0.21.96: Start on a stopped locked share whose screen / window / tab is gone -- the next pick comes back under its name -->
+    <p id="shRestartNote" hidden><span>Pick what to share as <b id="shRestartName"></b> &mdash; it comes back under the same stream name, so pins, grids and spotlights reconnect.</span>
+      <button type="button" class="ghost" id="shRestartCancel">Cancel</button></p>
     <p class="hint" id="hideMineShNote" hidden>Your shares are hidden on this screen (View &#9656; Hide my shares) &mdash; they are still live for everyone else.</p>   <!-- 0.21.91 -->
     <p class="hint" id="viewOnlyNote" hidden style="margin:0 0 10px;color:var(--asi-amber)">View-only access code:
       this relay lets you watch, not publish. Ask the relay's owner for the publisher code to share.</p>
@@ -4462,6 +4478,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         lk.className = "lk";
         lk.innerHTML = icon("lock");
         b.appendChild(lk);
+      }
+      if (typeof it.sw === "boolean") {   // 0.21.96: an on/off row wears a switch (toggles, never tick boxes)
+        const msw = document.createElement("label"); msw.className = "switch sm misw";   // a label like every switch; .misw lets the click through to the row
+        const msi = document.createElement("input"); msi.type = "checkbox"; msi.checked = it.sw; msi.tabIndex = -1; msi.setAttribute("aria-hidden", "true");
+        msw.append(msi, document.createElement("i"));
+        b.appendChild(msw);
+        b.setAttribute("role", "menuitemcheckbox"); b.setAttribute("aria-checked", String(it.sw));
       }
       b.title = it.tip || it.label;
       if (it.disabled) {   // 0.21.92: a greyed row that says why (an admin's remote control item a person can't get)
@@ -15560,7 +15583,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       items.push({ value: rp ? "rpinoff" : "rpin", label: rp ? "Unpin from this room" : "Pin to this room" });
     }
     if (personalCanPin(CHANNEL + "/" + hangName(ref.name))) items.push({ value: "mypin", label: "Pin to My room" });   // 0.21.75
-    if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
+    // 0.21.96 (Kenton: "I want the ability to lock a share in the shared sources, and when stopping sharing, they stay there and
+    // can be started again. Per share option."): screens, windows, tabs and media files -- mine only
+    const slk = ref.peer === window.__publisher?.peer && ref.id > -100 && !!window.__shareLock?.can?.(ref.id);
+    if (slk) items.push({ value: "slock", label: "Lock this share", sw: !!window.__shareLock.get(ref.id),
+      tip: "Locked: Stop keeps it in your Share list as a stopped share you can start again, even after KASTR restarts" });
+    if (ref.id > -100 && ref.kind !== "camera") items.push({ value: "stop", label: slk && window.__shareLock.get(ref.id) ? "Stop sharing (stays in your list)" : "Stop sharing" });   // 0.15.0: a grid is stopped by removing its feeds (0.16.0: a camera stops from the toolbar)
     const ownLit = window.__spotIs?.(CHANNEL + "/" + hangName(ref.name));   // 0.21.30: already spotlit -> offer to remove it
     const spotItem = viewLockedForMe() ? null : ownLit ? { value: "unspot", label: "Remove spotlight" } : { value: "all", label: "Spotlight for everyone" };   // 0.21.65 (m): none in a locked view
     if (ref.kind === "camera") {   // 0.16.0: my own camera can be spotlit like any tile
@@ -15573,6 +15601,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         if (pane && !pane.classList.contains("mainstage")) window.__selfSpot?.(pane);
       } else if (v === "stop") {
         try { starveBus.postMessage({ kind: "stop", from: "watch", target: ref.peer, id: ref.id }); } catch {}
+      } else if (v === "slock") {   // 0.21.96
+        window.__shareLock?.set?.(ref.id, !window.__shareLock?.get?.(ref.id), true);
       } else if (v === "mute") {
         const c = cur();
         if (c) { c.micMuted = !c.micMuted; sendControl(ref.peer, ref.id, { micMuted: c.micMuted }); }
@@ -26525,6 +26555,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 
   const added = [];
   const slots = new Map();   // id -> { ...spec, pane, publish, canvas, badge, nameEl, metaEl }
+  // 0.21.96 LOCKED SHARES (Kenton: "I want the ability to lock a share in the shared sources, and when stopping sharing, they
+  // stay there and can be started again. Per share option." -- "My share list, I restart."): a locked screen / window / tab /
+  // media file that stops is PARKED -- a stopped row in Share with Start, still in the stream library as not streaming, kept in
+  // kastr.share.locked (this device; the prefs mirror) so it survives a restart. Only its owner starts it again, under the SAME
+  // stream name. Records hold no codes, no tokens and no camera URLs: screen:// addresses, file names, labels and options only.
+  const LOCK_KEY = "kastr.share.locked", LOCK_MAX = 24;
+  const parked = [];               // stopped locked shares (records, see lockSpec)
+  const parkFiles = new Map();     // record key -> the File picked this session (after a restart the file is picked again)
+  let pendingFileRestart = null;   // the parked file whose Start opened the file picker
+  let shRestart = null;            // the parked native share whose Start found its window gone (the next Share pick restarts it)
 
   // ---- sources shared between views of this page ------------------------
   //
@@ -26677,6 +26717,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // host/camera.hang and fight over it on the relay.
   function takenNames() {
     const taken = new Set(added.map((a) => a.name));
+    for (const r of parked) { taken.add(r.name); try { taken.add(lockName(r.name)); } catch {} }   // 0.21.96: a stopped locked share keeps its name
     for (const rec of remote.values()) {
       for (const src of rec.sources) taken.add(src.name);
     }
@@ -26978,6 +27019,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!taken.has(cand)) return cand;
     }
   }
+  parked.push(...lockLoad());   // 0.21.96: my locked shares from the last session -- listed stopped, never started by themselves
 
   // ---- preferred microphone ----------------------------------------------
   //
@@ -27190,6 +27232,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       ...extra,
     };
     added.push(entry);
+    lockClaim(entry);   // 0.21.96: Start (or a reload adopting a native share) under a stopped locked share's name is that share
     renderPickers();
     // A first camera brings the mic with it: the selector defaults to
     // "Nobody", and a rig with exactly one camera and a silent mic was the
@@ -27227,11 +27270,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     }, 400);
   }
 
-  function removeSource(id) {
+  function removeSource(id, forget) {   // 0.21.96: forget = a locked share goes for good (no stopped row)
     const i = added.findIndex((a) => a.id === id);
     if (i < 0) return;
     // Cancel any queued reconnect, or it would resurrect this source.
     const going = added[i];
+    if (going.locked && lockable(going) && !forget) parkShare(going);   // 0.21.96: a locked share stops but stays in my list
     if (going.retryTimer) { clearTimeout(going.retryTimer); going.retryTimer = null; }
     if (going.kind === RTSP && going.url) rtspPersistSet(going.url, null, false);   // 0.8.8: stopped = not kept
     if (going.kind === SCREEN && going.native?.feedId != null) nativePost("/api/rtsp/remove", { id: going.native.feedId }).catch(() => {});   // 0.21.20: presenter mode's host capture
@@ -27250,6 +27294,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       nativePost("/api/rtsp/remove", { id: going.feedId }).then((r) => { if (r && !r.error) rtspClosedSet(going.url, false); }).catch(() => {});
     }
     added.splice(i, 1);
+    if (going.locked) lockSave();   // 0.21.96
     if (going.kind === RTSP) { going.gridSeat = false; going.evicted = false; seatSet(going.url, false); updateRtspGrid(); }   // 0.8.12: a removed feed gives up its cell (0.9.10: remembered too; 0.14.0: and its eviction)
     renderPickers();
     if (wasMicTarget) {
@@ -27267,6 +27312,215 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     refreshUi();
     announce();
   }
+
+  // ---- 0.21.96: locked shares ----------------------------------------------------------------------------------------
+  // Lockable: a browser screen / window / tab share, presenter mode, a native screen / window / tab, a media file. Not the
+  // toolbar camera (the toolbar is its Start), not camera feeds (RTSP / webcams / host files / RTMP have "Keep after
+  // restart" and the On air switch -- a second lock there would double up), not grids, presentations or slide videos.
+  function lockable(a) {
+    if (!a || a.presCanvas || a.presVideo) return false;
+    return a.kind === SCREEN || a.kind === FILE || (a.kind === RTSP && !IS_WEB2 && isScreenUrl(a.url));
+  }
+  function lockKind(a) { return a.kind === FILE ? "file" : a.kind === RTSP ? "native" : a.native ? "presenter" : "screen"; }
+  function lockNewK() { return "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }   // lockLoad runs early: declarations, not consts
+  // the stored name under THIS machine and person (the host id or my name may have moved since): HOST/op/<the same leaf>
+  function lockName(n) {
+    const leaf = String(n || "").split("/").pop() || "screen.hang";
+    return defaultName("camera", "").replace(/[^/]+$/, leaf);
+  }
+  function lockLibOf(a, prev) {   // its stream-library switch: true / false, or null while this computer has not said
+    try {
+      if (a.kind === RTSP) { const L = slots.get(a.id)?.pub?.library?.listed; return L ? !!L.want : (prev.lib ?? null); }
+      return LIBSH.here === null ? (prev.lib ?? null) : libShWant(ensureHang(a.name));
+    } catch { return prev.lib ?? null; }
+  }
+  function lockSpec(a) {   // what a locked share keeps while it is stopped (no secrets: see LOCK_KEY)
+    const prev = a.lockRec || {}, slot = slots.get(a.id);
+    const rec = { k: a.lockK || (a.lockK = lockNewK()), kind: lockKind(a), name: ensureHang(a.name), label: String(a.label || prev.label || "").slice(0, 120),
+                  room: currentChannel(), at: a.lockAt || (a.lockAt = Date.now()) };
+    if (rec.kind === "native") { rec.url = isScreenUrl(a.url) ? String(a.url).slice(0, 120) : ""; rec.audio = !!a.audio; const x = a.exe || prev.exe; if (x) rec.exe = String(x).slice(0, 80); }
+    else if (rec.kind === "presenter") { rec.url = isScreenUrl(a.native?.url) ? String(a.native.url).slice(0, 120) : ""; rec.presenter = a.presenter || prev.presenter || "standout"; }
+    else if (rec.kind === "screen") { rec.surface = a.surface || ""; rec.sound = slot && slot.displayStream ? (shareAudioOn(slot) && !a.micMuted) : !!(a.askSound ?? prev.sound); }
+    else {
+      const f = a.srcFile || a.file;
+      rec.fileName = String(f?.name || prev.fileName || "").slice(0, 200);
+      rec.shareH = Number(a.shareH) || 0;
+      rec.loop = slot?.media ? !!mediaLoopOn(slot) : a.loop === true;
+      rec.gain = typeof a.gain === "number" ? a.gain : 1;
+    }
+    rec.lib = lockLibOf(a, prev);
+    return rec;
+  }
+  function lockLoad() {   // kastr.share.locked -> records; anything unexpected is dropped (whitelisted fields only)
+    let d = null;
+    try { d = JSON.parse(localStorage.getItem(LOCK_KEY) || "null"); } catch {}
+    const out = [];
+    for (const r of (Array.isArray(d?.items) ? d.items : []).slice(0, LOCK_MAX)) {
+      if (!r || typeof r !== "object" || !["screen", "native", "presenter", "file"].includes(r.kind)) continue;
+      const name = ensureHang(String(r.name || ""));
+      if (!/^[^/\s]+\/(?:[^/\s]+\/)?[^/\s]+\.hang$/.test(name) || out.some((x) => x.name === name)) continue;
+      const rec = { k: String(r.k || lockNewK()).slice(0, 40), kind: r.kind, name, label: String(r.label || "").slice(0, 120), room: String(r.room || "").slice(0, 64), at: Number(r.at) || 0 };
+      if (r.kind === "native" || r.kind === "presenter") rec.url = isScreenUrl(r.url) ? String(r.url).slice(0, 120) : "";
+      if (r.kind === "native") { rec.audio = !!r.audio; if (r.exe) rec.exe = String(r.exe).slice(0, 80); }
+      if (r.kind === "presenter") rec.presenter = ["standout", "side", "reporter"].includes(r.presenter) ? r.presenter : "standout";
+      if (r.kind === "screen") { rec.surface = ["monitor", "window", "browser"].includes(r.surface) ? r.surface : ""; rec.sound = !!r.sound; }
+      if (r.kind === "file") { rec.fileName = String(r.fileName || "").slice(0, 200); rec.shareH = Number(r.shareH) || 0; rec.loop = !!r.loop; rec.gain = Math.max(0, Math.min(1, Number(r.gain ?? 1))); }
+      rec.lib = typeof r.lib === "boolean" ? r.lib : null;
+      out.push(rec);
+    }
+    return out;
+  }
+  let lockSaved = null;
+  function lockSave() {   // the stopped ones + the live locked ones (a live one is listed stopped after a restart)
+    const items = parked.map((r) => { const o = { ...r }; delete o.starting; return o; });
+    for (const a of added) if (a.locked && lockable(a)) { const s = lockSpec(a); if (!items.some((x) => x.k === s.k || x.name === s.name)) items.push(s); }
+    const v = JSON.stringify({ v: 1, items: items.slice(0, LOCK_MAX) });
+    if (v === lockSaved) return;
+    lockSaved = v;
+    try { items.length ? localStorage.setItem(LOCK_KEY, v) : localStorage.removeItem(LOCK_KEY); } catch {}
+  }
+  function lockSet(id, on, say) {   // the Lock switch (row, menu)
+    const a = added.find((x) => x.id === id);
+    if (!lockable(a)) return false;
+    a.locked = !!on;
+    if (on) { a.lockK = a.lockK || lockNewK(); a.lockAt = a.lockAt || Date.now(); }
+    lockSave();
+    renderSources();
+    if (say) window.__toast?.(on ? "Locked " + (a.label || "this share") + " — Stop keeps it in your Share list to start again"
+                                 : "Unlocked " + (a.label || "this share") + " — Stop removes it, as before", 4000, { level: "info" });
+    return true;
+  }
+  function parkShare(a) {   // removeSource -> a stopped row (the share itself stops exactly as before)
+    const rec = lockSpec(a);
+    for (let j = parked.length - 1; j >= 0; j--) if (parked[j].k === rec.k || parked[j].name === rec.name) parked.splice(j, 1);
+    parked.push(rec);
+    if (a.kind === FILE && a.srcFile instanceof Blob) parkFiles.set(rec.k, a.srcFile);
+    log("Stopped " + (rec.label || "the share") + " — it stays in your Share list (locked).");
+    window.__toast?.("Stopped " + (rec.label || "the share") + " — it stays in Share (locked). Start it again from there.", 5000, { level: "info" });
+    setTimeout(() => { try { libShSync(true); } catch {} }, 60);
+  }
+  function lockClaim(e) {
+    if (!parked.length || !lockable(e)) return;
+    const n = ensureHang(e.name), i = parked.findIndex((r) => r.name === n || lockName(r.name) === n);
+    if (i < 0) return;
+    const rec = parked.splice(i, 1)[0];
+    e.locked = true; e.lockK = rec.k; e.lockRec = rec; e.lockAt = rec.at || Date.now();
+    if (shRestart === rec.k) { shRestart = null; shRestartPaint(); }
+    lockSave();
+  }
+  function lockForget(k, say) {   // the stopped row's x, or its Lock switch turned off: gone, as an unlocked share would be
+    const i = parked.findIndex((r) => r.k === k);
+    if (i < 0) return;
+    const rec = parked.splice(i, 1)[0];
+    parkFiles.delete(k);
+    if (shRestart === k) { shRestart = null; shRestartPaint(); }
+    if (pendingFileRestart === k) pendingFileRestart = null;
+    lockSave();
+    renderSources();
+    setTimeout(() => { try { libShSync(true); } catch {} }, 60);
+    if (say) window.__toast?.("Removed " + (rec.label || "the share") + " from your Share list.", 3500, { level: "info" });
+  }
+  // a native share's exact screen / window / tab still there? A window handle can be reused by another program after a
+  // restart, so a window or tab also needs the same program (or, unknown, the same title); anything else -> pick in Share
+  function lockPlan(rec, d) {
+    if (!rec?.url || !d || !d.ok) return "pick";
+    const all = [...(d.screens || []), ...(d.windows || []), ...(d.tabs || [])];
+    const src = all.find((s) => { try { return shareKey(s) === rec.url; } catch { return false; } });
+    if (!src) return "pick";
+    if (src.kind !== "screen") {
+      const prog = String(src.exe || src.browser || "").toLowerCase();
+      if (rec.exe ? prog !== String(rec.exe).toLowerCase() : String(src.title || "") !== String(rec.label || "")) return "pick";
+    }
+    return "start";
+  }
+  function shRestartPaint() {
+    const rec = shRestart != null ? parked.find((r) => r.k === shRestart) : null;
+    if (shRestart != null && !rec) shRestart = null;
+    const n = document.getElementById("shRestartNote"); if (!n) return;
+    n.hidden = !rec;
+    if (rec) document.getElementById("shRestartName").textContent = rec.label || shortName(rec.name);
+  }
+  function shRestartTake() {   // the Share pick that restarts a parked share (once)
+    if (shRestart == null) return null;
+    const rec = parked.find((r) => r.k === shRestart) || null;
+    shRestart = null; shRestartPaint();
+    return rec;
+  }
+  function lockLibAfter(e, rec) {   // a native share's library listing is kept by this computer's KASTR: put back what it was
+    if (!e || rec.kind !== "native" || rec.lib == null) return;
+    let n = 0;
+    const t = setInterval(() => {
+      if (++n > 30 || !added.includes(e)) { clearInterval(t); return; }
+      const L = slots.get(e.id)?.pub?.library?.listed;
+      if (!L) return;
+      clearInterval(t);
+      if (!!L.want !== !!rec.lib) window.__libShares?.set?.(chanPath(ensureHang(e.name)), !!rec.lib);
+    }, 1000);
+  }
+  const lockFileOpts = (rec, name, f) => (f && rec.fileName && f.name === rec.fileName
+    ? { name, pickH: rec.shareH, label: rec.label, loop: rec.loop, gain: rec.gain }
+    : { name, loop: rec.loop, gain: rec.gain });   // another file: its own name and the size picker
+  async function lockStart(k) {   // the stopped row's Start -- the owner's click (the browser's pickers need it)
+    const rec = parked.find((r) => r.k === k);
+    if (!rec || rec.starting) return null;
+    const name = lockName(rec.name);
+    if (added.some((a) => ensureHang(a.name) === name)) { window.__toast?.("Something is already sharing as " + shortName(name) + ".", 4000, { level: "warn" }); return null; }
+    if (rec.lib != null && rec.kind !== "native") { try { LIBSH.sw.set(name, !!rec.lib); } catch {} }   // a page share's library switch
+    if (rec.kind === "screen") {   // nothing awaited first: the click is the gesture getDisplayMedia needs; Cancel parks it again
+      const e = addSource(SCREEN, null, rec.label || "Screen", { surface: rec.surface || undefined, name, label: rec.label || "Screen", askSound: !!rec.sound, micMuted: !rec.sound });
+      log("Pick the " + (rec.surface === "window" ? "window" : "screen") + " to share in the browser prompt.");
+      return e;
+    }
+    if (rec.kind === "file") {
+      const f = parkFiles.get(rec.k);
+      if (f) return shareMediaFile(f, lockFileOpts(rec, name, f));
+      pendingFileRestart = rec.k;   // after a restart the browser has to be given the file again
+      fileInput.addEventListener("cancel", () => { if (pendingFileRestart === rec.k) pendingFileRestart = null; }, { once: true });
+      window.__toast?.("Pick " + (rec.fileName || "the file") + " again — it comes back under the same stream name.", 6000, { level: "info" });
+      window.__pickFile ? window.__pickFile(fileInput) : fileInput.click();
+      return null;
+    }
+    rec.starting = true; renderSources();
+    let d = null;
+    try { if (!IS_WEB2) { const r = await fetch("/api/screen/sources" + (/^screen:[/][/]tab[/]/i.test(rec.url || "") ? "?tabs=1" : ""), { cache: "no-store" }); if (r.ok) d = await r.json(); } } catch {}
+    rec.starting = false;
+    if (!parked.includes(rec)) { renderSources(); return null; }   // removed meanwhile
+    if (lockPlan(rec, d) === "start") {
+      const e = rec.kind === "presenter" ? await sharePresenter(rec.url, rec.label, { name, presenter: rec.presenter })
+                                         : await addRtsp(rec.url, { label: rec.label, name, audio: !!rec.audio, exe: rec.exe });
+      if (e) { lockLibAfter(e, rec); window.__toast?.("Sharing " + (rec.label || "it") + " again.", 3500, { level: "info" }); }
+      renderSources();
+      return e || null;
+    }
+    // gone (or this computer cannot list its screens): Share asks -- never a capture nobody picked
+    shSwap = null; shSwapPaint();
+    shRestart = rec.k; shRestartPaint();
+    const sp = document.getElementById("sharePop");
+    if (sp?.hidden) document.getElementById("shareBtn")?.click(); else window.__dockReveal?.(sp);
+    try { if (/^screen:[/][/]window[/]/i.test(rec.url || "") && !shWinOpen) shWinToggle(); } catch {}
+    try { if (/^screen:[/][/]tab[/]/i.test(rec.url || "") && !shTabOpen) shTabToggle(); } catch {}
+    try { document.getElementById("shRestartNote")?.scrollIntoView?.({ block: "nearest" }); } catch {}
+    window.__toast?.((rec.label || "That share") + " is not open any more — pick what to share in its place.", 6000, { level: "info" });
+    renderSources();
+    return null;
+  }
+  document.getElementById("shRestartCancel")?.addEventListener("click", () => { shRestart = null; shRestartPaint(); });
+  // a live locked share is listed stopped after a restart: keep its record current (only written when it changed), and once
+  // more as the window goes away (visibilitychange comes before the prefs mirror's own pagehide flush)
+  setInterval(() => { if (added.some((a) => a.locked)) { try { lockSave(); } catch {} } }, 10000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && added.some((a) => a.locked)) { try { lockSave(); } catch {} } });
+  window.__shareLock = {
+    can: (id) => lockable(added.find((x) => x.id === id)),
+    get: (id) => !!added.find((x) => x.id === id)?.locked,
+    set: (id, on, say) => lockSet(id, on, say),
+    parked: () => parked.map((r) => ({ ...r, file: parkFiles.has(r.k) })),
+    start: (k) => lockStart(k),
+    forget: (k) => lockForget(k, false),
+    plan: (rec, d) => lockPlan(rec, d),   // rig: native shares cannot be exercised in a lab
+    name: (n) => lockName(n),
+    restartKey: () => shRestart,
+    stored: () => { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || "null"); } catch { return null; } },
+  };
 
   // The per-row video toggle's face. Amber when paused: a deliberate
   // state, not a fault, but it must not read as idle either.
@@ -27551,6 +27805,17 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const lbl = row.querySelector(".lbl");
       lbl.textContent = (a.kind === SCREEN || (a.kind === RTSP && isScreenUrl(a.url)) ? "🖵  " : "") + a.label;   // 0.21.26: a native screen share too
       { const xb = xsRowBtn(a); if (xb) row.querySelector(".top").insertBefore(xb, row.querySelector(".rm")); }   // 0.21.62: this share in other rooms; 0.21.75: + the row (a box's camera: server-kept)
+      if (lockable(a)) {   // 0.21.96: Lock this share -- Stop then keeps it here, stopped, to start again
+        const lw = document.createElement("label");
+        lw.className = "lockw";
+        lw.title = "Lock: Stop keeps this share in your Share list (stopped) to start again, even after KASTR restarts. Off = Stop removes it.";
+        lw.innerHTML = '<span class="switch sm"><input type="checkbox"><i></i></span> <span>Lock</span>';
+        const li = lw.querySelector("input");
+        li.checked = !!a.locked;
+        li.addEventListener("change", () => lockSet(a.id, li.checked, false));
+        row.querySelector(".top").insertBefore(lw, row.querySelector(".rm"));
+        if (a.locked) row.querySelector(".rm").title = "Stop (it stays here, locked \u2014 Start brings it back)";
+      }
       lbl.title = a.label;
 
       const cb = row.querySelector("input[type=checkbox]");
@@ -27734,6 +27999,37 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       homeFor(a).appendChild(row);   // 0.21.26: grouped under its grid
     }
 
+    // 0.21.96: stopped LOCKED shares -- Start brings each back under its old stream name; Lock off or the x forgets it
+    for (const rec of parked) {
+      const row = document.createElement("div");
+      row.className = "camrow parked";
+      row.dataset.k = rec.k;
+      row.innerHTML =
+        '<div class="top"><span class="lbl"></span><span class="badge stopped">stopped</span>' +
+        '<label class="lockw" title="Locked: it stays here while it is stopped, even after KASTR restarts. Off forgets it."><span class="switch sm"><input type="checkbox" checked><i></i></span> <span>Lock</span></label>' +
+        '<button class="start" type="button">Start</button>' +
+        '<button class="rm" type="button" title="Remove (forget this share)" ' +
+        'style="flex:none;padding:2px 8px;background:transparent;border:1px solid var(--line);color:var(--text-mute)">\u2715</button>' +
+        '</div><div class="pknote"></div>';
+      const lbl = row.querySelector(".lbl");
+      lbl.textContent = (rec.kind === "file" ? "\u25B6  " : "\u{1F5B5}  ") + (rec.label || shortName(rec.name));
+      lbl.title = (rec.label || "") + " \u2014 " + shortName(rec.name);
+      const what = rec.kind === "file"
+        ? (parkFiles.has(rec.k) ? "Start plays " + (rec.fileName || "the file") + " again." : "Start asks for " + (rec.fileName || "the file") + " again (after a restart the file is picked again).")
+        : rec.kind === "screen" ? "Start asks the browser which " + (rec.surface === "window" ? "window" : "screen") + " to share."
+        : "Start shares " + (rec.label || "it") + " again if it is still open; otherwise you pick it in Share.";
+      const where = rec.room && rec.room !== currentChannel() ? " Last shared in " + rec.room + "; Start shares it in this room." : "";
+      row.querySelector(".pknote").textContent = what + where + " Same stream name, so pins, grids and spotlights reconnect.";
+      const st = row.querySelector(".start");
+      st.disabled = !!rec.starting;
+      if (rec.starting) st.textContent = "Starting\u2026";
+      st.addEventListener("click", () => { lockStart(rec.k); });
+      const lk = row.querySelector(".lockw input");
+      lk.addEventListener("change", () => { if (!lk.checked) lockForget(rec.k, true); });
+      row.querySelector(".rm").addEventListener("click", () => lockForget(rec.k, true));
+      camrowsEl.appendChild(row);
+    }
+
     // Sources started in another view of this page -- the Share dropdown on
     // Watch, or the Publish tab. Listed so neither view can be misleading
     // about what is on air, but owned by the view that started them.
@@ -27771,7 +28067,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       }
     }
 
-    const localN = added.filter((a) => a.kind !== "camera").length;   // 0.8.9
+    const localN = added.filter((a) => a.kind !== "camera").length + parked.length;   // 0.8.9; 0.21.96: + stopped locked shares
     srcCount.textContent = String(localN + remoteCount);
     srcEmpty.hidden = localN + remoteCount > 0;
     renderRemoteStage();
@@ -28076,10 +28372,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     renderSources(); refreshUi(); announce();
     return true;
   }
-  async function displayAsk(surf) {
+  async function displayAsk(surf, sound) {
     // 0.8.8: the Share menu's Include-sound switch and the Screen/Window
     // card decide the picker (naming a surface opens Chrome on that pane).
-    const snd = document.getElementById("shareSound")?.checked ?? false;
+    const snd = typeof sound === "boolean" ? sound : (document.getElementById("shareSound")?.checked ?? false);   // 0.21.96: a locked share's own choice
     try {
       return await navigator.mediaDevices.getDisplayMedia({
         video: surf ? { displaySurface: surf } : true,
@@ -28113,7 +28409,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   async function captureDisplay(slot) {
     let stream;
     try {
-      stream = await displayAsk(slot.entry.surface);
+      stream = await displayAsk(slot.entry.surface, slot.entry.askSound);
     } catch (err) {
       const cancelled = err && (err.name === "NotAllowedError" || err.name === "AbortError");
       slot.metaEl.textContent = cancelled ? "share cancelled" : "share failed: " + (err && err.name);
@@ -31263,6 +31559,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     log(label + " finished \u2014 share ended (loop is off)");
     setTimeout(() => {
       if (!slots.has(entry.id)) return;
+      if (entry.locked) { removeSource(entry.id); return; }   // 0.21.96: a locked file stops and stays in Share -- its Start plays it again
       entry.keepMedia = true;   // removeSource must not delete the server copy yet
       removeSource(entry.id);
       let replayed = false;
@@ -33309,7 +33606,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       // on the keep list BEFORE its first publish, so the box records keep=true and a relaunch brings it back
       if (opts?.keep) { rtspPersistSet(url, opts.label || rtspLabel(url), true, gridId); if (opts.label) rtspNameSet(url, opts.label); }
       const scr = isScreenUrl(url);   // 0.21.20: a native screen share is never a grid member and sends the computer's sound when asked
-      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: scr ? !!document.getElementById("shareSound")?.checked : audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId, screen: scr || undefined });   // 0.9.5; 0.21.17: a remembered rename wins
+      const entry = addSource(RTSP, null, rtspLabel(url), { feedId: data.id, url, audio: scr ? (typeof opts?.audio === "boolean" ? opts.audio : !!document.getElementById("shareSound")?.checked) : audioWanted(url), label: opts?.label || rtspNameOf(url) || rtspLabel(url), gridId, screen: scr || undefined,   // 0.9.5; 0.21.17: a remembered rename wins
+        ...(opts?.name ? { name: opts.name } : {}), ...(scr && opts?.exe ? { exe: String(opts.exe) } : {}) });   // 0.21.96: a locked share comes back under its name (+ which program it showed)
       gridOfSet(url, gridId);
       if (seatSaved(url)) updateRtspGrid();   // 0.9.10: a remembered seat holds its cell from now on, not from the first frame
       log(`Added RTSP feed ${data.id} (${url}).` +
@@ -33397,7 +33695,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (IS_WEB2) {   // 0.17.0: a web client has no media store here -- the browser plays what it can decode
       // 0.21.0: ...and still gets the resolution picker (canvas downscale in the composite)
       const wp = await webProbe(f);
-      const pickedH = opt?.noPicker ? 0 : await pickFileRes(f, wp);
+      const pickedH = opt?.noPicker ? 0 : opt?.pickH != null ? Number(opt.pickH) || 0 : await pickFileRes(f, wp);   // 0.21.96: a locked file's own size
       if (pickedH === null) return null;
       const srcH = Number(wp.height) || 0;
       try { f.kastrShareH = pickedH && srcH && pickedH < srcH ? pickedH : 0; f.kastrSrcH = srcH; } catch {}
@@ -33416,7 +33714,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     } catch {}
     if (!probe) return f;
     // 0.21.0: the resolution picker -- every probed file gets it (default "same as source")
-    const pickedH = opt?.noPicker ? 0 : await pickFileRes(f, probe);
+    const pickedH = opt?.noPicker ? 0 : opt?.pickH != null ? Number(opt.pickH) || 0 : await pickFileRes(f, probe);   // 0.21.96: a locked file's own size
     if (pickedH === null) return null;   // cancelled
     const srcH = Number(probe.height) || 0;
     const shareH = pickedH && srcH && pickedH < srcH ? pickedH : 0;   // 0 = as the source
@@ -33496,10 +33794,16 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   fileInput.addEventListener("change", async () => {
     const picked = fileInput.files && fileInput.files[0];
     fileInput.value = "";          // allow re-picking the same file later
+    const pr = pendingFileRestart != null ? parked.find((r) => r.k === pendingFileRestart) : null;   // 0.21.96: Start on a stopped locked file
+    pendingFileRestart = null;
     if (!picked) return;
+    return shareMediaFile(picked, pr ? lockFileOpts(pr, lockName(pr.name), picked) : null);
+  });
+  // 0.21.96: o = { name, pickH, label, loop, gain } when a locked file starts again (its stream name, size, label, loop, volume)
+  async function shareMediaFile(picked, o) {
     let f = picked, extra = {};
     try {
-      const r = await prepareMediaFile(picked);
+      const r = await prepareMediaFile(picked, o?.pickH != null ? { pickH: o.pickH } : undefined);
       if (r === null) return;   // 0.21.0: cancelled in the picker
       if (r && r.mediaUrl) {   // 0.14.0: streamed from the local server, converted as it plays
         f = new File([], r.name, { type: "video/mp4" });   // an empty stand-in: the player streams by URL (0.8.13 trick, kept)
@@ -33511,7 +33815,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     catch (e) { window.__toast?.("Could not prepare the file (" + (e?.message || e) + ") \u2014 sharing it as is.", 7000, { level: "warn" }); }
     // Stash the File itself on the entry; startSlot assigns it to publish.source
     // directly, which avoids the library popping a second native picker.
-    const entry = addSource(FILE, null, f.name.replace(/\.[^.]+$/, ""), { file: f, mediaUrl: null, ...extra });
+    const entry = addSource(FILE, null, o?.label || f.name.replace(/\.[^.]+$/, ""), { file: f, mediaUrl: null, ...extra, srcFile: picked,   // 0.21.96: the File itself, for a locked file's Start
+      ...(o?.name ? { name: o.name } : {}), ...(o?.loop != null ? { loop: !!o.loop } : {}), ...(o?.gain != null ? { gain: Number(o.gain) } : {}) });
     if (extra.upload) extra.upload.promise.then((j) => {   // the server's full-file duration replaces the 16 MB slice's guess
       if (!j?.duration) return;
       entry.duration = j.duration;
@@ -33520,7 +33825,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     });
     log("Added file: " + f.name + (running ? "" : " \u2014 click Start to play it."));
     window.__shareChosen?.();   // 0.21.78: a media file chosen in Share closes it
-  });
+    return entry;
+  }
 
   for (const el of Object.values(enc)) {
     el.addEventListener("change", applySettingsAll);
@@ -33757,7 +34063,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // 0.8.8: Teams-style Share -- Screen / Window cards name the surface; the
   // list rows open the feed input, the media picker and the room upload.
   const shareSurface = (surface) => {
-    addSource(SCREEN, null, surface === "window" ? "Window" : "Screen", { surface });
+    const rr = shRestartTake();   // 0.21.96: Start on a stopped locked share -> this pick comes back under its name
+    addSource(SCREEN, null, surface === "window" ? "Window" : "Screen", { surface, ...(rr ? { name: lockName(rr.name), label: rr.label || undefined } : {}) });
     log(running ? "Pick the " + surface + " to share in the browser prompt." : "Screen share added. The picker appears when you click Start.");
   };
   $("srcScreenBtn").addEventListener("click", () => shareSurface("monitor"));
@@ -34132,7 +34439,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     $("shWinCount").textContent = String((d.windows || []).length);
   }
   window.__shareOpened = () => { shTick++; shLoad(); webcamLoad(true); clearInterval(shTimer); shTimer = setInterval(() => { if (document.hidden) return; shTick++; shLoad(); webcamLoad(false); }, 3000); };   // 0.21.65: + the Webcam section
-  window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; if (shSwap != null) { shSwap = null; shSwapPaint(); } };   // 0.21.73: closing ends "Share something else"
+  window.__shareClosed = () => { clearInterval(shTimer); shTimer = null; if (shSwap != null) { shSwap = null; shSwapPaint(); } if (shRestart != null) { shRestart = null; shRestartPaint(); } };   // 0.21.96: + a pending restart   // 0.21.73: closing ends "Share something else"
   window.__shareIdle = () => { clearInterval(shTimer); shTimer = null; };   // 0.21.78: a pinned Share refreshes its pictures only while the pointer is over it
   // 0.21.78 (Kenton: "Close the share tab after choosing something, except for RTSP shares, as I usually want to rename them
   // first"): a screen / window / tab, presenter, "Share something else" or a media file closes Share; the RTSP section's feeds
@@ -34144,6 +34451,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const url = shareKey(src);
     if (added.some((a) => a.kind === RTSP && a.url === url)) { window.__toast?.("Already sharing " + (src.kind === "screen" ? "that screen" : src.kind === "tab" ? "that tab" : "that window") + ".", 3000); return; }
     const label = src.kind === "screen" ? (src.name || "Screen") : (src.title || (src.kind === "tab" ? "Tab" : "Window"));
+    const prog = src.kind === "screen" ? undefined : (src.exe || src.browser || undefined);   // 0.21.96: which program (a locked share's Start checks it)
+    const rr = shSwap == null ? shRestartTake() : null;   // 0.21.96: Start on a stopped locked share whose window was gone
+    if (rr) {
+      const nm = lockName(rr.name);
+      if (added.some((a) => ensureHang(a.name) === nm)) { window.__toast?.("Something is already sharing as " + shortName(nm) + ".", 4000, { level: "warn" }); return; }
+      const e = presenterMode() !== "content" ? await sharePresenter(url, label, { name: nm }) : await addRtsp(url, { label, name: nm, exe: prog, audio: rr.kind === "native" ? !!rr.audio : undefined });
+      if (!e) return;
+      if (rr.lib != null && e.kind === RTSP) lockLibAfter(e, { ...rr, kind: "native" });
+      else if (rr.lib != null) { try { LIBSH.sw.set(nm, !!rr.lib); } catch {} }
+      window.__toast?.("Sharing " + label + " as " + (rr.label || shortName(nm)) + ".", 4000);
+      if (e.kind === RTSP) shareChosen();
+      return;
+    }
     if (shSwap != null) {   // 0.21.73: "Share something else" -- this replaces that share in place
       const a = added.find((x) => x.id === shSwap);
       shSwap = null; shSwapPaint();
@@ -34151,7 +34471,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       return;
     }
     if (presenterMode() !== "content") return sharePresenter(url, label);   // 0.21.20: composited with my camera
-    const e = await addRtsp(url, { label });
+    const e = await addRtsp(url, { label, exe: prog });
     if (!e) return;
     window.__toast?.("Sharing " + label + (e.audio ? " with sound" : "") + ".", 4000);
     shareChosen();
@@ -34181,16 +34501,18 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const cb = document.getElementById("topCamChev") || document.querySelector("#topCamBtn + .tbchev") || document.getElementById("topCamBtn");
     try { window.__openCamFx ? window.__openCamFx() : cb?.click(); } catch {}
   });
-  async function sharePresenter(url, label) {
+  async function sharePresenter(url, label, o) {   // 0.21.96: o = { name, presenter } when a locked share starts again
     let data = null;
     try {
       const r = await fetch("/api/rtsp/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, presenter: true }) });
       data = await r.json();
       if (!r.ok || data?.error) throw new Error(data?.error || r.status);
-    } catch (e) { window.__toast?.("Could not start the share: " + (e?.message || e), 6000, { level: "error" }); return; }
-    addSource(SCREEN, null, label, { native: { feedId: data.id, url }, presenter: presenterMode(), label });
+    } catch (e) { window.__toast?.("Could not start the share: " + (e?.message || e), 6000, { level: "error" }); return null; }
+    const pm = o?.presenter && ["standout", "side", "reporter"].includes(o.presenter) ? o.presenter : presenterMode();
+    const e = addSource(SCREEN, null, label, { native: { feedId: data.id, url }, presenter: pm === "content" ? "standout" : pm, label, ...(o?.name ? { name: o.name } : {}) });
     window.__toast?.("Presenting " + label + ".", 4000);
     shareChosen();
+    return e;
   }
   window.__sharePresenter = sharePresenter;   // rig
   $("srcWindowBtn").addEventListener("click", () => shareSurface("window"));
@@ -35324,6 +35646,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         rows.push({ path: p, label: String(label).slice(0, 80), kind: it.kind, state: dark ? "dark" : "live",
                     audio: !!(it.slot?.publish && !it.slot.publish.muted) });
         if (!dark && now - (LIBSH.stillAt.get(p) || 0) > LIBSH_STILL_MS) { const b = libShStill(it); if (b) { stills[p] = b; LIBSH.stillAt.set(p, now); } }
+      }
+      // 0.21.96: a stopped LOCKED share stays in the library as not streaming (dark) until it is unlocked or removed
+      if (ok) for (const rec of parked) {
+        const key = lockName(rec.name), p = libShPathOf(key);
+        if (!(rec.lib ?? !!LIBSH.here) || rows.some((x) => x.path === p)) continue;
+        rows.push({ path: p, label: String(rec.label || shortName(key)).slice(0, 80), kind: rec.kind === "file" ? "media" : "screen", state: "dark", audio: false });
       }
       if (!rows.length && !LIBSH.posted) return;
       const sig = JSON.stringify(rows);

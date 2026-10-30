@@ -414,8 +414,8 @@ class PageSeams(unittest.TestCase):
         self.has('"presentation_video_"', hook)
         self.has("presVideo: true", hook)
         self.has("resume: { t: 0, paused: !o.auto }", hook)   # waits on its first frame unless the deck autoplays it
-        self.has("const pickedH = opt?.noPicker ? 0 : await pickFileRes(f, probe);", p)
-        self.has("const pickedH = opt?.noPicker ? 0 : await pickFileRes(f, wp);", p)
+        self.has("const pickedH = opt?.noPicker ? 0 : opt?.pickH != null ? Number(opt.pickH) || 0 : await pickFileRes(f, probe);", p)   # 0.21.96: + a locked file's own size
+        self.has("const pickedH = opt?.noPicker ? 0 : opt?.pickH != null ? Number(opt.pickH) || 0 : await pickFileRes(f, wp);", p)
         self.has("if (slot.entry.presVideo) { announceMedia(slot, true); return; }", p)   # no "share ended" + Play again toast
 
     def test_viewers_cannot_drive_it(self):

@@ -304,7 +304,7 @@ class Page(unittest.TestCase):
         so = self.sec("  function spotOrdered(list) {", EOL + "  }" + EOL)
         self.assertIn("[...list.filter((v) => rank.has(v.target)).sort((a, b) => rank.get(a.target) - rank.get(b.target)), ...list.filter((v) => !rank.has(v.target))]", so)
         self.assertIn("if (spotDone && setSig === spotSetSig) { spotDone = sig; if (items.length >= 2) spotStage = items; applyState(); return; }", p)   # an order change pulls nobody
-        self.assertIn('const votes = set.map((v) => v.target + "@" + v.ts).sort().join("|");', p)
+        self.assertIn('const votes = set.map((v) => (v.was || v.target) + "@" + v.ts).sort().join("|");', p)   # 0.21.96: a swap in place keeps the old path's vote
         self.assertIn("board.spotOrder = order; board.customGrids = cgs; board.gridMetas = metas;", p)
 
     def test_o_back_to_spotlight(self):

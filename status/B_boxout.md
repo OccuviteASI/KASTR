@@ -7,14 +7,15 @@ and library listing keep working.
 
 ## Which machines (kastr_serve.boxout_state)
 - **"box"**: mode publisher or publisher-relay (every camera box).
-- **"relay"**: mode relay, OR its relay running now, OR relay autostart on (relay-autostart.json or kastr.ini
-  relay_autostart). This is the same test as kastr.hosts_relay, the 0.21.85 "relay machine" rule.
+- **"relay"**: only a relay that is ALWAYS ON -- mode relay, OR relay autostart on (relay-autostart.json enabled, or
+  kastr.ini relay_autostart). Kenton (2026-10-30, "Only always-on relays"): a relay started by hand (Relay page Start) does
+  NOT count -- that laptop stays a person and can still join rooms. This is narrower than kastr.hosts_relay (which also counts
+  a relay merely running).
 - **Never**: mode viewer (a display exists to watch rooms), and a person's everyday KASTR (mode full) that runs no relay.
   Web clients of a relay host, the presentation recorder and remote pages never get the flag, because /api/instance only
   sends `boxout` to a local caller.
-- Kenton's own app on 127.0.0.1:8001 was not read. His everyday KASTR stays a person unless it runs a relay itself. If he
-  starts a relay there (Relay page Start, or autostart), it becomes a relay machine. The 30 s poll then moves the page to
-  No room.
+- Kenton's own app on 127.0.0.1:8001 was not read. His everyday KASTR stays a person unless its relay is always on. Pressing
+  Start on the Relay page does not change that. Turning relay autostart on does: the 30 s poll then moves the page to No room.
 
 ## What it does
 - **Join room page / Change room / rail**: only "No room — this machine only shares into the library and the rooms I pick"
@@ -38,6 +39,26 @@ and library listing keep working.
   switches to No room. Its cameras are carried first: the page's xs saves, plus Bridge._boxout_carry on republish.
 - **Restart/Move by an admin**: the resume ticket (kastr.rejoin) and kastr.lastjoin are rewritten to No room before the gate
   reads them. authMint refuses any real room in any case.
+
+- **Swap in place** (Kenton, "Swap in place"): a viewer already in the room when the box updates sees the library stream
+  take the old tile's place.
+  - The library path lib/<host>/<op>/<leaf>.hang has the same tail as the old <room>/<host>/<op>/<leaf>.hang (the relay's
+    lib_alias_ok rule; the catalogue's `aka` wins when the page has it).
+  - When the library tile is created (createTile -> tileSwapIn), the old tile is removed AT ONCE, not after the 4 s debounce.
+    There is no duplicate tile and no tile left "waiting for keyframe". The old path is never re-created next to it, even
+    while the relay still announces it.
+  - A LIVE old tile is swapped only when the library path is listed into this room (Show in rooms) or the catalogue names
+    the old path as its alias. A person's share of this room that is also in the library keeps its own tile.
+  - What follows the camera: my pick (selected tile), my row order, my pins / grids / watch-or-parked memory
+    (libAkaRewrite), and every spotlight vote (mine, other members', the room board's) plus the board's arrange order.
+    Spotlights and the order follow at read time (akaOf in spotSetNow / spotOrdered), so pages that join later get the same
+    stage.
+  - The other way round: the hub moves the board's spotlight to the lib/ path before the library tile reaches the page. The
+    old tile keeps that spotlight until its library tile comes, so the stage never empties.
+  - A tile that already went in the update's gap (a clean stop) is remembered for 5 minutes (tileLeft). Its row order and
+    pick come back when the library tile arrives, unless the viewer picked something else since.
+  - The catalogue alias may reach the page before the library tile. The old tile stays watched (on the stage) until the
+    swap.
 
 ## Enforcement -- honest limits
 There is no machine identity before 0.22 (SSO).
@@ -73,13 +94,34 @@ There is no machine identity before 0.22 (SSO).
   new lines (confirm_popup window, 0.21.75 xsServerPath, 0.21.89 heading, 0.21.91 mainPerson).
 - One camera only. Two test://pattern feeds share one URL, and restore matches feeds by URL (existing behaviour).
 
+## Lab proof: swap in place (pw_swap.py -> swap_results.json, swap_run5.log, shots/swap-*)
+- rhbox's relay was started by hand: its /api/instance says boxout off (a person, the always-on rule).
+- Two cameras in boxout-lab: Yard (rhbox) and Gate (cambox on the OLD tree). The viewer spotlights Gate, then Yard, for
+  everyone. Stage on both viewers (light + dark): [Gate, Yard].
+- The box is hard-stopped (its recorded PID) and restarted on this branch. Both viewers were sampled every 250 ms:
+  - Light viewer (the one who voted): at 9.35 s the old tile went and lib/cambox-0960-0669/labop/gate.hang came in the same
+    sample. Never both tiles at once. The stage went straight from [Gate, Yard] to [lib Gate, Yard], with no empty stage
+    between. The pick stayed on the camera.
+  - Dark viewer: the same at 4.67 s.
+  - The old path's later "inactive" did nothing; it was never re-created.
+- A viewer that joins after the update gets the same stage [lib Gate, Yard] within 3.2 s.
+- No page errors on any of the three pages.
+- Earlier runs found two gaps, both fixed:
+  - the catalogue alias unwatched the old tile before the library tile came;
+  - the hub had already moved the board's spotlight to lib/, so it pointed at a tile not there yet.
+- Shots: swap-before-light/dark, swap-after-light/dark, swap-late-joiner-light.
+- Suites after both follow-ups: Windows 2566 tests and WSL 2566 tests. The only failure on each is test_npu_fx (known,
+  worktree only). Two older source-assert tests were updated for the new lines: test_gallery_onair (select window) and
+  test_release_0_21_66 (votes line).
+
 ## Doubts / defaults for Kenton
-1. A relay running on any machine (even a manual Start on a laptop) makes that KASTR a relay machine. This follows the 0.21.85
-   hosts_relay rule.
+1. Only an always-on relay (mode relay, or relay autostart on) makes a KASTR a relay machine (Kenton, 2026-10-30). A laptop
+   whose relay was started by hand stays a person until autostart is turned on or the relay stops.
 2. Viewer mode is exempt.
-3. A viewer who was watching during the update keeps the old tile ("waiting for keyframe") until the relay drops the old
-   connection. The camera then shows as a new tile (library path), not in the old tile's place. Spotlight on the old tile does
-   not follow; pins and grids do (libAka).
+3. Swap in place is done on the viewer's page (no relay or board writes). The room board keeps whatever path the hub gave it;
+   pages of 0.21.96 read either path as the camera. A page older than 0.21.96 still shows the old behaviour: it waits for a
+   keyframe, then shows a new tile. On a clean stop (not a hard kill) the old tile can go before the library tile comes; the
+   spotlight comes back on the library tile when it arrives, and the stage shows the rest meanwhile.
 4. Locked-room codes for page-owned listings are carried in memory only (never stored). After a page reload, a locked room's
    listing needs its code again. Server-owned camera listings keep the code in the sealed feeds file.
 5. The rtsp-feeds.json `boxout` record is dropped the next time the bridge rewrites the file. launch.log and /api/diag keep it.

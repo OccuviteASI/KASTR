@@ -4,7 +4,8 @@ rooms, they connect to their 'My room' or no room at all, and their shares just 
 them to."
 
 WHICH machines (kastr_serve.boxout_state): a camera box (mode publisher / publisher-relay -> "box"), or a KASTR that runs the
-relay itself (mode relay, its relay running, relay autostart on in relay-autostart.json or kastr.ini -> "relay"). A viewer
+relay ALWAYS ON (mode relay, relay autostart on in relay-autostart.json or kastr.ini -> "relay"; Kenton: "Only always-on
+relays" -- a relay started by hand on the Relay page does not count, that laptop stays a person). A viewer
 display never is; a person's everyday KASTR that runs no relay never is; only the machine's OWN page is told (/api/instance to
 a local caller), never a web client of a relay host nor its presentation recorder.
 
@@ -77,14 +78,17 @@ class WhichMachines(unittest.TestCase):
 
     def test_relay_machines(self):
         self.assertEqual(self.st("relay"), {"on": True, "why": "relay"})
-        self.assertEqual(self.st("full", FakeRelaySrv(running=True)), {"on": True, "why": "relay"})
         self.assertEqual(self.st("full", FakeRelaySrv(auto=True)), {"on": True, "why": "relay"})
+        self.assertEqual(self.st("full", FakeRelaySrv(running=True, auto=True)), {"on": True, "why": "relay"})
         with mock.patch.object(kastr_serve, "ini_get", lambda k: "true" if k == "relay_autostart" else None):
             self.assertEqual(self.st("full"), {"on": True, "why": "relay"})
 
     def test_a_persons_kastr_and_viewer_displays_never(self):
         self.assertFalse(self.st("full")["on"])                                   # everyday KASTR, no relay here
         self.assertFalse(self.st("full", FakeRelaySrv())["on"])                   # a relay server object that is not running
+        # Kenton (2026-10-30): "Only always-on relays" -- Start pressed on the Relay page (running, no autostart) stays a person
+        self.assertFalse(self.st("full", FakeRelaySrv(running=True))["on"])
+        self.assertNotIn("relay.running()", _read("kastr_serve.py").split("def boxout_state", 1)[1].split("def boxout_note", 1)[0])
         self.assertFalse(self.st("viewer", FakeRelaySrv(running=True))["on"])     # a viewer display watches rooms
 
     def test_a_broken_relay_object_is_not_a_relay(self):
@@ -412,6 +416,67 @@ class Page(unittest.TestCase):
         i = p.index("// ---- 0.21.96 BOX-OUT")
         blk = p[i:p.index("window.__boxout = {", i)]
         self.assertNotIn("checkbox", blk)
+
+
+class SwapInPlace(unittest.TestCase):
+    """Kenton (2026-10-30, "Swap in place"): a box in a real room updates and its camera moves to No room -- viewers already in
+    that room see the library stream take the old tile's place, keeping its spotlight / stage position; no duplicate tile and
+    no tile left "waiting for keyframe"."""
+
+    def setUp(self):
+        self.p = _read("moq-watch-lite.html")
+
+    def fn(self, head, n=2600):
+        i = self.p.index(head)
+        return self.p[i:i + n]
+
+    def test_twin_is_the_relays_alias_rule(self):
+        # the relay's lib_alias_ok: old <room>/<host>/<op>/<leaf>.hang -> lib/<same tail>; the catalogue's aka wins when known
+        f = self.fn("function libTwinPath(p) {", 600)
+        self.assertIn("const a = libAkaMap.get(p);", f)
+        self.assertIn('LIB_ROOT + "/" + parts.slice(1).join("/")', f)
+        self.assertIn("isLibPath(p)", f)
+        self.assertIn("libAkaMap = map;   // 0.21.96", self.p)
+        self.assertTrue(kastr_relay.lib_alias_ok("yard/cam-0001/op/gate.hang", "lib/cam-0001/op/gate.hang"))
+        a = self.fn("function akaOf(p) {", 700)
+        self.assertIn("if (tiles.has(p)) return p;", a)   # a live old tile is itself until it is swapped
+        self.assertIn("return l && tiles.has(l) ? l : p;", a)
+        # the other way: a vote the hub already moved to lib/... lands on the old tile while that still holds the place
+        self.assertIn("if (isLibPath(p)) { const o = CHANNEL + p.slice(LIB_ROOT.length); return tiles.has(o) ? o : p; }", a)
+
+    def test_library_tile_takes_the_old_place_at_once(self):
+        c = self.p[self.p.index("  function createTile(name) {"):self.p.index("  function removeTile(name) {")]
+        self.assertIn("{ const l = tileAka.get(String(name)); if (l && tiles.has(l)) return; }", c)   # never brought back next to it
+        i, j = c.index("if (isLibPath(name)) { try { tileSwapIn(name); }"), c.index("spotApplyWinner();   // 0.21.0")
+        self.assertLess(i, j)   # swapped BEFORE the standing spotlight is applied
+        s = self.fn("  function tileSwapIn(lib) {", 2400)
+        self.assertIn("if (tiles.has(o)) { cancelPendingRemoval(o); removeTile(o); }", s)   # at once, not the 4 s debounce
+        self.assertNotIn("scheduleRemoveTile", s)
+        self.assertIn("if (selectedName === o || (left?.sel && selectAt < left.at)) selectedName = lib;", s)
+        self.assertIn("manualOrder.splice(Math.min(at, manualOrder.length), 0, lib);", s)
+        self.assertIn("libAkaRewrite(new Map([...olds].map((o) => [o, lib])))", s)   # pins / grids / watch memory follow
+        self.assertIn("if (parked) { enabledStreams.delete(lib); parkedStreams.add(lib); saveEnabled(); saveParked(); }", s)
+        # the catalogue's alias may land before the library tile: the old tile stays watched (on the stage) until the swap
+        self.assertIn("if (enabledStreams.has(a)) { if (!tiles.has(a)) enabledStreams.delete(a); enabledStreams.add(b); }", self.p)
+        self.assertIn("spotDone = null;", s)
+        # a tile that already went in the update's gap is followed too
+        self.assertIn("for (const k of tileLeft.keys()) if (!tileAka.has(k) && libTwinPath(k) === lib) olds.add(k);", s)
+        # a live tile only when it is this camera moved out (listed here, or the catalogue's alias) -- never a person's own share
+        self.assertIn("libTwinPath(k) === lib && (xsTiles.has(lib) || libAkaMap.get(k) === lib)) olds.add(k);", s)
+        self.assertIn("if (isLibPath(k)) n += tileSwapIn(k);", self.fn("  function libAkaTake() {", 900))
+        r = self.fn("  function removeTile(name) {", 400)
+        self.assertIn("tileLeft.set(name, { at: Date.now(), sel: selectedName === name, ord: manualOrder.indexOf(name) });", r)
+        self.assertIn("selectAt = Date.now();   // 0.21.96", self.fn("  function select(name) {", 500))
+
+    def test_spotlight_and_arrange_slot_follow(self):
+        s = self.fn("  function spotSetNow() {", 3000)
+        self.assertIn("const was = String(v.target), tg = akaOf(was);", s)
+        self.assertLess(s.index("tg = akaOf(was)"), s.index("// 0.21.47 (Kenton): a spotlight stays in its room"))
+        self.assertIn("const t = akaOf(String(o.target)); off.set(t,", s)
+        o = self.fn("  function spotOrdered(list) {", 600)
+        self.assertIn("const k = akaOf(String(t)); if (!rank.has(k)) rank.set(k, i);", o)
+        self.assertIn("pick.flatMap((v) => (v.was ? [v.target, v.was] : [v.target]))", self.p)   # Remove spotlight takes the old vote too
+        self.assertIn('const votes = set.map((v) => (v.was || v.target) + "@" + v.ts)', self.p)   # a swap is no news
 
 
 if __name__ == "__main__":

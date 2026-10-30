@@ -69,7 +69,7 @@ class Page(unittest.TestCase):
 
     def test_who_has_a_main_room(self):
         p = self.p
-        self.assertIn('const mainPerson = () => !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay";', p)
+        self.assertIn('const mainPerson = () => !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay" && !boxedOut();', p)   # 0.21.96: + box-out
         t = body(p, "function mainTarget(from) {", 600)
         self.assertIn("if (inviteGuest()) return { slug: LOBBY, code: \"\" };", t)
         self.assertIn('if (mainPref() === "mine" && p && from !== p.slug) return { slug: p.slug, code: p.code, personal: true };', t)

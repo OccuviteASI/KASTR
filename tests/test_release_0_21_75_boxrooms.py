@@ -316,7 +316,7 @@ class Page(unittest.TestCase):
 
     def test_box_rows_are_server_owned(self):
         p = self.p
-        self.assertIn('const xsServerPath = (path) => isPublisherMode() && xsKindOf(path) !== "grid";', p)
+        self.assertIn('const xsServerPath = (path) => (isPublisherMode() && xsKindOf(path) !== "grid")', p)   # 0.21.96: + a boxed relay machine's cameras
         self.assertIn('fetch("/api/rtsp/xs", { method: "POST"', p)
         self.assertIn("const xsRowBtn = (a) => {", p)
         self.assertIn("{ const xb = xsRowBtn(a); if (xb)", p)

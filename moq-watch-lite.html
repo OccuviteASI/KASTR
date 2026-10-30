@@ -1795,6 +1795,7 @@
   /* 0.21.41 (Kenton: "Move the Create Room button to the right of the Rooms and server info with just a + in a circle") */
   .sbhead .sbtools { position:absolute; top:4px; right:2px; display:flex; gap:2px; }
   .sbhead .sbnew .icon { width:18px; height:18px; }
+  body.boxout #sbCreate, body.boxout #sbCreateHd { display:none !important; }   /* 0.21.96 box-out: a box / relay machine creates no room */
   .sbfoot { display:none; }
   body.sb-collapsed .sbfoot { display:block; }   /* the icon rail has no header: its "+" stays at the bottom */
   .sbhead .sbppl { flex:none; width:24px; height:24px; padding:0; border:0; border-radius:5px; background:none; color:var(--text-mute); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
@@ -3892,6 +3893,117 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     return s;
   }
   window.__homeRoom = { of: homeRoomOf, is: isHomeRoom };   // module 2 + rig
+  // ---- 0.21.96 BOX-OUT (Kenton, 2026-10-30: "For Relays/Camera boxes, I would like them to not be able to directly connect to
+  // rooms, they connect to their 'My room' or no room at all, and their shares just go to the library or whatever rooms they tell
+  // them to."). This machine's own KASTR says so (/api/instance.boxout, to a local page only -- kastr_serve.boxout_state): a
+  // camera box (mode publisher / publisher-relay) or a machine that runs the relay itself (mode relay, its relay running, relay
+  // autostart on). Such a page joins its hidden home room ("No room") or its own My room and nothing else; every other way into
+  // a room (the Join room page, the rail, Change room, invite links, person invites, Create room) is refused with one line. The
+  // relay's minter refuses the same (the `boxed` flag on authMint) and the box server refuses a real room for its cameras --
+  // there is no machine identity before 0.22, so this is the page's and its own KASTR's rule, not a wall.
+  let BOXOUT = { on: false, why: "" };
+  let boxoutSaid = "";
+  function boxoutRead(d) {
+    const b = d && typeof d.boxout === "object" && d.boxout ? d.boxout : null;
+    BOXOUT = { on: !!(b && b.on), why: b && b.why === "relay" ? "relay" : b && b.on ? "box" : "" };
+    try { document.body.classList.toggle("boxout", BOXOUT.on); } catch {}
+  }
+  function boxedOut() { try { return !IS_WEB && !!BOXOUT.on; } catch { return false; } }
+  function boxWhat() { return BOXOUT.why === "relay" ? "relay machine" : "camera box"; }
+  function boxHome() { try { return homeRoomOf(HOSTNAME1); } catch { return ""; } }
+  function boxRoomOk(slug) {   // its own home room, or its own My room (the code this device keeps)
+    const s = String(slug || "");
+    if (s && s === boxHome()) return true;
+    try { return isPersonalSlug(s) && s === personalGet()?.slug; } catch { return false; }
+  }
+  const BOXOUT_HOME_TEXT = () => { let lib = false; try { lib = libOn(); } catch {}
+    return "No room \u2014 this machine only shares into " + (lib ? "the library and " : "") + "the rooms I pick"; };
+  function boxRefusal(slug) {
+    let t = String(slug || "");
+    try { t = slug === LOBBY ? "the Lobby" : roomTitle(slug); } catch {}
+    return "This " + boxWhat() + " can\u2019t join " + t + " \u2014 it stays in No room or its My room; its cameras show in rooms through Show in rooms.";
+  }
+  function boxSay(text, opts) {   // the status line + a toast + launch.log and /api/diag (_boxout) on this machine
+    try { log("Box-out: " + text); } catch {}
+    if (!opts?.quiet) { try { window.__toast?.(text, 6000, { level: opts?.level || "warn" }); } catch {} }
+    try { fetch("/api/rtsp/note", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "box-out: " + text }) }).catch(() => {}); } catch {}
+  }
+  // a room this machine leaves: what this page listed from there follows it (Show in rooms keeps R), R's code kept for this run
+  function boxCarry(from, code) {
+    const home = boxHome();
+    if (!from || from === home) return 0;
+    let n = 0;
+    try {
+      const o = xsSaved();
+      for (const k of Object.keys(o)) {
+        if (!k.startsWith(from + "/")) continue;
+        const nk = home + "/" + k.slice(from.length + 1);
+        o[nk] = [...new Set([...(Array.isArray(o[nk]) ? o[nk] : []), ...(Array.isArray(o[k]) ? o[k] : []), ...(from === LOBBY ? [] : [from])])].filter((sl) => !isHomeRoom(sl));
+        n++;
+      }
+      localStorage.setItem(XS_PATHS_KEY(), JSON.stringify(o));
+    } catch {}
+    if (code && from !== LOBBY) { try { xsCodes[from] = String(code); } catch {} }
+    if (from !== LOBBY) { try { localStorage.setItem("kastr.boxout.carry", JSON.stringify({ from, to: home, until: Date.now() + 600000 })); } catch {} }
+    return n;
+  }
+  function boxCarryFor(room) {   // -> the room a new share of mine in `room` keeps showing in (the 10 minutes after a move)
+    try {
+      const c = JSON.parse(localStorage.getItem("kastr.boxout.carry") || "null");
+      return c && c.to === room && Date.now() < (Number(c.until) || 0) && c.from ? String(c.from) : "";
+    } catch { return ""; }
+  }
+  // the Join room page (gateShow): a remembered room, a rejoin ticket (an update, an admin's Restart / Move) or an invite link
+  // that names a real room -> No room, once, said (Kenton: boxes in a real room "MOVE OUT ON UPDATE and KEEP LISTING")
+  function boxoutGate() {
+    if (!boxedOut()) return;
+    const home = boxHome();
+    try {
+      const inv = inviteGet();
+      if (inv && inv.room && !boxRoomOk(inv.room)) { inviteSet(null); boxSay("Invite link not used. " + boxRefusal(inv.room)); }
+    } catch {}
+    let moved = "";
+    try {
+      const t = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null");
+      if (t && t.room && !boxRoomOk(channelSlug(t.room))) {
+        moved = channelSlug(t.room);
+        boxCarry(moved, t.code || "");
+        sessionStorage.setItem("kastr.rejoin", JSON.stringify({ ...t, room: home, code: "", main: false }));
+      }
+    } catch {}
+    try {
+      const lj = lastJoin();
+      if (lj && lj.room && !boxRoomOk(channelSlug(lj.room))) {
+        const from = channelSlug(lj.room);
+        if (from !== moved) boxCarry(from, lj.code || "");
+        moved = moved || from;
+        localStorage.setItem("kastr.lastjoin", JSON.stringify({ ...lj, room: home, code: "" }));
+      }
+    } catch {}
+    if (moved && boxoutSaid !== moved) {
+      boxoutSaid = moved;
+      boxSay("this " + boxWhat() + " left " + (moved === LOBBY ? "the Lobby" : "room " + moved) + " for No room (" + home + ")" + (moved === LOBBY ? "" : " \u2014 its shares still show in " + moved), { level: "info" });
+    }
+  }
+  // live: this machine became a relay machine (its relay started) while in a real room -> it moves to No room, its shares kept there
+  let boxMoving = false;
+  function boxoutLive() {
+    try {
+      if (!boxedOut() || boxMoving || joinState !== "joined" || boxRoomOk(CHANNEL)) return;
+      const from = CHANNEL, home = boxHome();
+      boxMoving = true;
+      boxCarry(from, from === LOBBY ? "" : authRoomCode);
+      boxoutSaid = from;
+      boxSay("this " + boxWhat() + " left " + (from === LOBBY ? "the Lobby" : roomTitle(from)) + " for No room" + (from === LOBBY ? "" : " \u2014 its shares still show in " + roomTitle(from)), { level: "info" });
+      Promise.resolve(switchRoom({ slug: home }, "")).catch(() => {}).finally(() => { boxMoving = false; });
+    } catch { boxMoving = false; }
+  }
+  async function boxoutPoll() {
+    if (IS_WEB) return;
+    try { boxoutRead(await fetch("/api/instance", { cache: "no-store" }).then((r) => r.json())); } catch { return; }
+    boxoutLive();
+  }
+  window.__boxout = { on: () => boxedOut(), why: () => BOXOUT.why, home: boxHome, ok: boxRoomOk, refusal: boxRefusal, poll: boxoutPoll };   // module 2 + rig
   const inLobby = () => { try { return joinState === "joined" && CHANNEL === LOBBY; } catch { return false; } };   // (joinState is declared further down: early callers get false)
   // 0.21.91 (Kenton: "Regular people with the Publisher code should start in their 'My room' instead of the lobby ... There should be
   // an option in the profile menu that lets them choose their preferred main room. Either Lobby or My room. When joining KASTR or
@@ -4770,7 +4882,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // 0.21.75: on a Publisher box a camera's rooms belong to the BOX SERVER (POST /api/rtsp/xs -> rtsp-feeds.json; it re-lists
   // them every minute with or without this window) -- this page's own listing heartbeat (xsMine) keeps only what the page
   // itself publishes (a grid composite), so the two never fight over one listing
-  const xsServerPath = (path) => isPublisherMode() && xsKindOf(path) !== "grid";
+  const xsServerPath = (path) => (isPublisherMode() && xsKindOf(path) !== "grid")
+    || (boxedOut() && (xsKindOf(path) === "rtsp" || window.__xsServer?.owned?.(path) != null));   // 0.21.96: + a relay machine's cameras
   async function xsServerSet(id, rooms, codes) {
     let d = null;
     try {
@@ -4993,7 +5106,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         if (old) xsSave(p, []);
         continue;
       }
-      const keep = saved[xsKey(p)];
+      let keep = saved[xsKey(p)];
+      { const was = boxedOut() && !keep ? boxCarryFor(CHANNEL) : ""; if (was && was !== CHANNEL) { keep = [was]; xsSave(p, keep); } }   // 0.21.96: box-out -- a share that was in the room this machine left
       if (Array.isArray(keep) && keep.length) {
         const r = await xsSetRooms(p, keep, { remember: false });
         if (r.needCode || r.error) window.__toast?.(shortLabel(p) + " is not shown in " + (r.needCode || r.error) + " \u2014 Share \u25b8 Show in other rooms", 6000, { level: "warn" });
@@ -5883,6 +5997,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.addEventListener("kastr:auth", () => { if (pEnded) { pEnded = null; personalEndedPaint(); } });   // joined again (a good mint)
   window.__personalEnded = { state: () => (pEnded ? { ...pEnded } : null), end: personalEnded, clear: () => { pEnded = null; personalEndedPaint(); } };   // rig + the gate's "Join another room instead"
   async function personalGuestEnter(slug) {
+    if (boxedOut() && !boxRoomOk(slug)) { boxSay(boxRefusal(slug)); return; }   // 0.21.96: box-out
     const r = personalShared.find((x) => x.slug === slug);
     const t = roomTitle(slug);
     if (joinState !== "joined") { window.__toast?.("Join a room first \u2014 then " + t + " opens from the top of the rooms list.", 4000, { level: "info" }); return; }
@@ -6180,6 +6295,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const room = String(it.room);
     if (isPersonalSlug(room) && it.title) personalOwners.set(room, String(it.title).replace(/'s room$/, ""));
     if (joinState !== "joined" || CHANNEL === room) return;
+    if (boxedOut() && !boxRoomOk(room)) { boxSay("An invite from " + (it.by || "someone") + " was not opened \u2014 " + boxRefusal(room), { level: "info" }); return; }   // 0.21.96: box-out
     const t = roomTitle(room);
     try { chimeRoom(); } catch {}
     const role = it.role === "p" || it.role === "b" ? it.role : "";   // 0.21.92: a presenter / backstage invitation
@@ -9256,6 +9372,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       PAGE_MODE = PAGE_MODES.includes(m) ? m : "full";
       ownRelayHere = !!(d && d.relayName);
       odOn = d?.ondemand === true;   // 0.21.10
+      boxoutRead(d);   // 0.21.96: box-out
       if (odOn) { try { window.__rtspRerender?.(); } catch {} }   // module 2 painted its rows before this answer
     }),
     new Promise((res) => setTimeout(res, 1500)),
@@ -9263,6 +9380,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const isViewerMode = () => PAGE_MODE === "viewer";
   const isPublisherMode = () => PAGE_MODE === "publisher" || PAGE_MODE === "publisher-relay";
   window.__pageMode = () => PAGE_MODE;   // 0.15.0 (D1): module 2's presence payload carries it
+  if (!IS_WEB) setInterval(() => { boxoutPoll(); }, 30000);   // 0.21.96: box-out follows a relay started / stopped here
   // 0.15.0 (B4): the relay OPERATOR is a page on the relay host's own KASTR (the group
   // endpoints under /api/relay/* are loopback-guarded there; anyone else is a creator).
   const isRelayOperator = () => ownRelayHere && relayHostBase() === location.origin;
@@ -18724,6 +18842,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   async function authMint(room, access, roomCode) {
     const base = authBase();
     if (!base) throw new Error("no relay url");
+    if (boxedOut() && !boxRoomOk(room)) throw Object.assign(new Error(boxRefusal(room)), { boxed: true });   // 0.21.96: box-out
     const inv = inviteGet();   // 0.21.75: an invite link for THIS room rides every mint (the join and the re-mints) until it ends
     // 0.21.91: ... and a guest's Lobby (no access code of their own): the link lets them wait there for the room it is for
     const invTok = inv && (inv.room === room || (room === LOBBY && !String(access ?? ""))) ? inv.token : undefined;
@@ -18743,6 +18862,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                                  admit: admTok,   // 0.21.89: let in by someone in the room (this visit)
                                  op: String(window.__publisher?.opSlug?.() || "").toLowerCase() || undefined,   // 0.21.92 I: remove / ban -- a Ban covers my name too
                                  meet: invTok ? undefined : (window.__kmeet?.creds?.(room) || undefined),   // 0.21.96: a scheduled meeting -- who I am (name + My room code)
+                                 boxed: boxedOut() || undefined,   // 0.21.96: box-out -- the minter holds a box / relay machine to its home room and My room
                                  invite: invTok }),   // 0.21.75
         });
         break;
@@ -20534,14 +20654,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // joined, e.g. "Join room — Lobby" with vault picked); a new room keeps the current name until it is made
   function gateHeadingSlug(cur, joined) {
     const sel = joinEls.joinChanSel?.value;
+    if (boxedOut() && !joined) {   // 0.21.96 box-out: the heading names No room or My room, never a room it cannot join
+      const pr = personalGet();
+      return sel === "__mine" && pr ? pr.slug : sel === "__home" || !boxRoomOk(cur) ? boxHome() : cur;
+    }
     return (!joined && sel && sel !== "__new" && lastChannelList.some((r) => r.slug === sel)) ? sel : cur;
   }
+  function gateHeadingTitle(slug) { return isHomeRoom(slug) ? "No room" : roomTitle(slug); }   // 0.21.96: a box's hidden home room is "No room"
   function paintChannelChip() {
     const c = readChannel();
     const joined = joinState === "joined";
     const b = joinEls.roomBanner;
     if (!b) return;
-    joinEls.joinChannelCur.textContent = roomTitle(gateHeadingSlug(c, joined));   // 0.21.61; 0.21.89: the room picked on the gate
+    joinEls.joinChannelCur.textContent = gateHeadingTitle(gateHeadingSlug(c, joined));   // 0.21.61; 0.21.89: the room picked on the gate
     if (!joined) {
       b.replaceChildren();
       b.textContent = "Join a room\u2026";
@@ -20951,6 +21076,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   async function sbCardClick(card, rec) {
     if (isPhone()) document.body.classList.remove("sb-open");
+    if (boxedOut() && !boxRoomOk(rec?.slug)) { boxSay(boxRefusal(rec?.slug)); return; }   // 0.21.96: box-out
     const ask = askBeforeRoomSwitch();   // 0.21.65: More > "Ask before changing rooms"
     if (joinState === "joined") {
       if (rec.slug === CHANNEL) { try { closeAllPops(); paintRoomInfo(); openFromOptions(roomInfoPop); } catch {} return; }   // 0.13.1: my room -> Room info
@@ -21337,7 +21463,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     let host = urlInput.value.trim();
     try { host = new URL(host).host; } catch {}
     if (sbHostEl) sbHostEl.textContent = host;
-    const list = lastChannelList;   // 0.13.1: the joined room is listed too (marked .cur)
+    const list = boxedOut() ? lastChannelList.filter((r) => boxRoomOk(r.slug)) : lastChannelList;   // 0.13.1: the joined room is listed too (marked .cur); 0.21.96: a box / relay machine lists no room
     const seen = new Set(), seenG = new Set();
     // 0.15.0 (B4): ungrouped cards first (main, then the operator's order), then every
     // group (relay order, then name) as a .sbgroup header followed by its cards; a
@@ -21528,6 +21654,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }, 1000);
   document.getElementById("sbCreate")?.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (boxedOut()) { boxSay("This " + boxWhat() + " creates no room \u2014 it stays in No room or its My room; its cameras show in rooms through Show in rooms."); return; }   // 0.21.96: box-out
     if (sbFormEl && !sbFormEl.hidden && sbFormEl.dataset.mode === "create") { sbFormClose(); return; }
     if (joinState !== "joined") {
       // at the gate the gate's own "New room…" is the create form
@@ -23096,6 +23223,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   window.__switches = () => switchLog.slice();   // rig
   async function switchRoom(rec, code, opts) {
     if (joinState !== "joined") return;
+    if (boxedOut() && !boxRoomOk(rec?.slug)) { boxSay(boxRefusal(rec?.slug)); return; }   // 0.21.96: box-out
     switchNow = { to: rec.slug, from: CHANNEL, at: Date.now(), t0: performance.now() };   // 0.21.70
     switchLog.push(switchNow); if (switchLog.length > 10) switchLog.shift();
     { const w = switchNow; setTimeout(() => { if (switchNow === w) switchMark("gaveUp"); }, 20000); }
@@ -23167,6 +23295,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   async function inviteArrive(inv) {
     const room = String(inv.room);
+    if (boxedOut() && !boxRoomOk(room)) { try { inviteSet(null); } catch {} boxSay("Invite link not used. " + boxRefusal(room)); return; }   // 0.21.96: box-out
     // 0.21.91: the link's relay is this one (or it names none) -- a person in a room goes straight there, never via the Join room page
     let sameRelay = !inv.relay;
     try { const k = (u) => { const x = new URL(relayAddr(u)); return x.protocol + "//" + x.host + x.pathname.replace(/[/]+$/, ""); }; sameRelay = sameRelay || k(inv.relay) === k(urlInput.value.trim()); } catch {}
@@ -23301,7 +23430,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (joinEls.joinKeepRow) joinEls.joinKeepRow.hidden = !isNew;   // 0.12.0
     const rec = lastChannelList.find((r) => r.slug === joinEls.joinChanSel.value);
     const need = isNew || !!rec?.locked;
-    joinEls.joinChannelCur.textContent = roomTitle(gateHeadingSlug(readChannel(), joinState === "joined"));   // 0.21.89
+    joinEls.joinChannelCur.textContent = gateHeadingTitle(gateHeadingSlug(readChannel(), joinState === "joined"));   // 0.21.89
     joinEls.joinPwdRow.hidden = !need;
     { const ab = document.getElementById("joinAskBtn"); if (ab) ab.hidden = isNew || !rec?.locked || !accCanAsk(rec.slug, true); }   // 0.21.89: Ask for access
     joinEls.joinPwdLabel.textContent = isNew
@@ -23908,6 +24037,19 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   function gatePaintChannels() {
     const cur = readChannel();
     const sel = joinEls.joinChanSel;
+    if (boxedOut()) {   // 0.21.96 box-out: "they connect to their 'My room' or no room at all"
+      const pr = personalGet(), k = "boxout:" + (pr ? pr.slug : "") + ":" + BOXOUT_HOME_TEXT();
+      if (sel.options.length && (k === gateKey || document.activeElement === sel)) return;
+      gateKey = k;
+      const keep = sel.options.length ? sel.value : null;
+      sel.replaceChildren();
+      sel.appendChild(new Option(BOXOUT_HOME_TEXT(), "__home"));
+      if (pr) sel.appendChild(new Option("My room", "__mine"));
+      const lj = lastJoin();
+      sel.value = keep && [...sel.options].some((o) => o.value === keep) ? keep : pr && lj && lj.room === pr.slug ? "__mine" : "__home";
+      paintPwdRow();
+      return;
+    }
     const list = lastChannelList;
     let key = (isPublisherMode() ? "box:" + (libOn() ? "lib:" : "") : "") + list.map((r) => r.slug + "|" + (r.locked ? 1 : 0) + "|" + (r.count ?? "") + "|" + (r.persistent ? 1 : 0)).join(",");   // 0.21.75: + the box's own option
     const keyMine = mainPerson() && !inviteGuest() && !!personalGet() ? "|mine:" + mainPref() : "";   // 0.21.91
@@ -24034,6 +24176,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // A rejoin ticket means this gate is a formality: restore the saved
     // name/toggles and join the saved room as soon as the publish module
     // is up. Failure clears the ticket and leaves the normal gate.
+    boxoutGate();   // 0.21.96: box-out -- a remembered real room, a ticket or a link to one -> No room
+    gateInvitePaint();
     let saved = null;
     try { saved = JSON.parse(sessionStorage.getItem("kastr.rejoin") || "null"); } catch {}
     // 0.12.0: publisher modes AUTO-JOIN the last room -- an unattended camera box
@@ -24041,7 +24185,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // synthetic ticket takes the last join's codes and toggles (video ON by
     // default); a failed attempt retries 10 -> 60 s; a wrong code stops the
     // retries and leaves the prefilled gate. Viewer and full keep the manual gate.
-    if (isPublisherMode() && !pubRejoinStop && !(saved && saved.room)) {
+    if ((isPublisherMode() || boxedOut()) && !pubRejoinStop && !(saved && saved.room)) {   // 0.21.96: + a relay machine (its home room / My room)
       const lj = lastJoin();
       if (lj && lj.room) {
         saved = { room: lj.room, code: lj.code || "", access: lj.access || "", synthetic: true,
@@ -24072,7 +24216,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         if (joinState !== "joined") {
           rejoinRec = null;
           try { sessionStorage.removeItem("kastr.rejoin"); } catch {}
-          if (isPublisherMode()) pubRejoinRetry();   // 0.12.0
+          if (isPublisherMode() || boxedOut()) pubRejoinRetry();   // 0.12.0; 0.21.96: + a relay machine
           if (saved.main && joinState === "prejoin") mainLaunchFailed(saved);   // 0.21.91: the Join room page, with why
         }
         rejoinRec = null;
@@ -24097,7 +24241,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     stopGatePreview();
     joinEls.joinPrevOff.querySelector(".ji").innerHTML = icon("camOff");
     joinEls.joinGate.hidden = false;
-    gateMsg(isViewerMode() ? "Pick a room to watch." : lastJoin()?.room ? "Pick a room and press Join." : "");   // 0.11.0 / 0.12.0
+    gateMsg(boxedOut() ? "This " + boxWhat() + " stays in No room or its My room \u2014 its cameras show in rooms through Show in rooms."   // 0.21.96
+      : isViewerMode() ? "Pick a room to watch." : lastJoin()?.room ? "Pick a room and press Join." : "");   // 0.11.0 / 0.12.0
     if (gateInvitePaint() && !window.__personalEnded?.state?.()) gateMsg("Enter your name and press Join.");   // 0.21.75; 0.21.85: the ended screen says it all
     // 0.12.0: camera feeds the server kept publishing (or republished at launch)
     if (!isViewerMode() && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) {
@@ -24217,6 +24362,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       slug = homeRoomOf(HOSTNAME1);
       rec = null;
     } else if (joinEls.joinChanSel.value === "__new") {
+      if (boxedOut()) return joinFail("This " + boxWhat() + " creates no room \u2014 it stays in No room or its My room.");   // 0.21.96: box-out
       if (!joinEls.joinChanNew.value.trim()) return joinFail("Name the new room first.");
       slug = channelSlug(joinEls.joinChanNew.value);
       if (isHomeRoom(slug)) return joinFail("Names starting with \u201cbox-\u201d are kept for camera boxes \u2014 pick another name.");   // 0.21.75
@@ -24246,6 +24392,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!accGrantFor(slug)) { const why = await lockedRoomRefusal(rec, joinEls.joinPwd.value); if (why) return joinFail(why); }   // 0.21.17: hash-less locks fail closed on open relays; 0.21.89: a let-in visit has no code
     }
     if (pwd === null) pwd = joinEls.joinPwd.value;
+    if (boxedOut() && !boxRoomOk(slug)) {   // 0.21.96: box-out -- an invite link, a typed room, an old ticket
+      if (inv) { inviteSet(null); try { gateInvitePaint(); } catch {} }
+      gateKey = ""; try { gatePaintChannels(); } catch {}
+      boxSay(boxRefusal(slug), { quiet: true });
+      return joinFail(boxRefusal(slug));
+    }
     try { localStorage.setItem(CHANNEL_KEY, slug); } catch {}
 
     // Secured relay: the mint is the authoritative code check (the
@@ -24446,7 +24598,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // Join room page stays for the first time, a relay switch, a refused / changed code, or a main room that cannot open (no My
   // room yet). A resume after an update, the silent rejoin, an invite link and a room link (?room=) still win. Leave goes to the
   // main room -- or to the Lobby when I am already in it. Camera boxes, relay-only machines and viewer displays are unchanged.
-  const mainPerson = () => !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay";
+  const mainPerson = () => !isPublisherMode() && !isViewerMode() && PAGE_MODE !== "relay" && !boxedOut();   // 0.21.96: + a relay machine
   function mainTarget(from) {   // -> {slug, code, personal}: where a launch / Leave goes from `from`
     if (inviteGuest()) return { slug: LOBBY, code: "" };
     const p = personalGet();
@@ -27635,7 +27787,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     log("Cross-room: " + news.map((n) => n.label + " left " + n.room).join("; ") + " (room deleted)");
   }
   let xsSrvSig = "";
-  const isBoxPage = () => /^publisher/.test(String(window.__pageMode?.() || ""));
+  const isBoxPage = () => /^publisher/.test(String(window.__pageMode?.() || "")) || !!window.__boxout?.on?.();   // 0.21.96: + a relay machine
   const xsSrvId = (a) => (a && !IS_WEB2 && isBoxPage() && nativeRtsp && a.kind === RTSP && a.feedId != null) ? a.feedId : null;
   window.__xsServer = {
     owned: (path) => { const a = added.find((x) => xsSrvId(x) != null && chanPath(ensureHang(x.name)) === path); return a ? a.feedId : null; },

@@ -410,6 +410,14 @@
     background:rgba(10,14,18,.82); border:1px solid var(--line); border-radius:8px; padding:4px 8px; font-size:11px; color:#fff;
     font-family:var(--font-mono); }
   .mediabar[hidden] { display:none; }
+  /* 0.21.95 (Kenton: "When sharing media, it never hides the control elements or the name ... It should only show them on hover
+     over the window itself, and fade out after."): with a mouse the bar shows only while the pointer is on ITS tile (or a key
+     moved focus into it, or a scrub is held), then fades with the idle chrome */
+  @media (hover: hover) {
+    #stage .pane > .mediabar, #stage .pubpane > .mediabar { transition:opacity .25s ease; }
+    #stage .pane:not(:hover):not(:has(:focus-visible)):not(:has([data-scrub="1"])) > .mediabar,
+    #stage .pubpane:not(:hover):not(:has(:focus-visible)):not(:has([data-scrub="1"])) > .mediabar { opacity:0; pointer-events:none; }
+  }
   .mediabar button { background:transparent; border:0; color:#fff; width:26px; height:24px; padding:0; cursor:pointer; border-radius:4px;
     display:inline-flex; align-items:center; justify-content:center; font-size:13px; }
   .mediabar button:hover, .mediabar button.on { background:rgba(255,255,255,.14); }
@@ -1978,12 +1986,17 @@
   #stage .pubpane:not(:hover):not(:focus-within) .bar > .pull { visibility:hidden; }
   @media (hover: hover) {
     #stage .pane .label .l, #stage .pubpane .bar .nm, #stage .pane.vtile .vonly .vn { display:none; }
-    #stage .pane:hover .label .l, #stage .pane:focus-within .label .l,
-    #stage .pubpane:hover .bar .nm, #stage .pubpane:focus-within .bar .nm, #stage .pubpane.warnstate .bar .nm,
-    #stage .pane.vtile:hover .vonly .vn, #stage .pane.vtile:focus-within .vonly .vn { display:block; }
+    /* 0.21.95: a click inside the tile (Play, volume) no longer keeps the name up -- only a key's focus (:focus-visible) does */
+    #stage .pane:hover .label .l, #stage .pane:has(:focus-visible) .label .l,
+    #stage .pubpane:hover .bar .nm, #stage .pubpane:has(:focus-visible) .bar .nm, #stage .pubpane.warnstate .bar .nm,
+    #stage .pane.vtile:hover .vonly .vn, #stage .pane.vtile:has(:focus-visible) .vonly .vn { display:block; opacity:1; }
+    #stage .pane .label .l, #stage .pubpane .bar .nm, #stage .pane.vtile .vonly .vn { transition:opacity .25s ease, display .25s allow-discrete; }
+    @starting-style {
+      #stage .pane:hover .label .l, #stage .pubpane:hover .bar .nm, #stage .pane.vtile:hover .vonly .vn { opacity:0; }
+    }
     /* the mouse rests (idle chrome): the name goes with the chrome, the marks stay */
     #stagewrap.idle #stage .pane .label .l, #stagewrap.idle #stage .pubpane:not(.warnstate) .bar .nm,
-    #stagewrap.idle #stage .pane.vtile .vonly .vn, #stagewrap.idle #stage .pubpane .bar > .pull { display:none; }
+    #stagewrap.idle #stage .pane.vtile .vonly .vn, #stagewrap.idle #stage .pubpane .bar > .pull { display:none; opacity:0; }   /* 0.21.95: fades (allow-discrete) */
   }
 
   /* 0.8.1: People is a POPOVER (popcard) under its button, not a slide-over. */
@@ -12095,9 +12108,13 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   // chevron button and any other overlay"). Never while scrubbing, while a control has focus, or while
   // the pointer rests on a control. Touch: any tap shows (no tap-to-hide -- a tap already selects).
   const IDLE_MS = 3000, IDLE_CTL = ".mediabar,.zoomctl,.pchev,#stageBack,.gmenu,.latb";   // 0.21.65: the name row (.bar/.label + marks) never hides now
-  let idleT = null, idleOver = false;
+  let idleT = null, idleOver = false, idleKey = false;
+  // 0.21.95 (Kenton: media "never hides the control elements or the name"): a CLICKED Play / volume / seek kept focus inside the
+  // stage, and focus held the chrome up for good. Only focus a key put there (Tab) holds it now.
+  document.addEventListener("keydown", () => { idleKey = true; }, true);
+  document.addEventListener("pointerdown", () => { idleKey = false; }, true);
   const idleBusy = () => idleOver || !!stageWrap.querySelector('[data-scrub="1"], .gmenu')
-    || (document.activeElement && document.activeElement !== document.body && stageWrap.contains(document.activeElement) && document.activeElement.matches("button,input,select"));
+    || (idleKey && document.activeElement && document.activeElement !== document.body && stageWrap.contains(document.activeElement) && document.activeElement.matches("button,input,select"));
   const idleHide = () => { if (idleBusy()) { idleT = setTimeout(idleHide, 1000); return; } stageWrap.classList.add("idle"); };
   const idleShow = () => { stageWrap.classList.remove("idle"); clearTimeout(idleT); idleT = setTimeout(idleHide, IDLE_MS); };
   for (const ev of ["pointermove", "pointerdown", "wheel"]) stageWrap.addEventListener(ev, idleShow, { passive: true });

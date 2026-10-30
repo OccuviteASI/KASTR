@@ -15364,7 +15364,9 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       if (!v || !v.target) return;
       const ts = Number(v.ts) || 0;
       if (v.target === "~none") { if (ts > noneAt) noneAt = ts; return; }
-      if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target))) return;   // 0.21.47 (Kenton): a spotlight stays in its room
+      if (String(v.target).split("/", 1)[0] !== CHANNEL && !xsTiles.has(String(v.target)) && !libTiles.has(String(v.target))) return;   // 0.21.47 (Kenton): a spotlight stays in its room
+      // 0.21.95 (Kenton: "when I spotlight multiple things, only 1 stays on stage"): a library stream added to this room (lib/...) is
+      // this room's too -- its spotlight was dropped here, so a mosaic never formed and only the tile I clicked stayed
       const c = add.get(v.target);
       if (!c || ts > c.ts) add.set(String(v.target), { target: String(v.target), ts, by });
     };

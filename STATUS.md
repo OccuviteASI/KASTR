@@ -72,7 +72,7 @@ audio graph (output-latency mapped). Values are the median of 12-13 beeps per ru
 - Sharer's own tile (its earpiece vs its own tile draw), after: -15 to +46 (before: -51 to +15).
 - Stamp jumps after the fix: 0 in every run. Silence pads: 0-1. Trims: 0-3 (CPU-starved sharer).
 - Picture delay (lead) measured: 2-66 ms (the transcoded AVI is the highest).
-- Evidence: C:\kastr-scratch02195vsyncesults\ (before*, after6-after14), rig avsync.py / summ.py / ana.py.
+- Evidence: C:/kastr-scratch/v02195/avsync/results/ (before*, after6-after14), rig avsync.py / summ.py / ana.py.
 
 ## Tests
 

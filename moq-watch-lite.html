@@ -30747,14 +30747,18 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const th = slot.entry.shareH && slot.entry.shareH < h ? slot.entry.shareH : h;
       const tw = th === h ? w : 2 * Math.round(w * th / h / 2);
       if (cv.width !== tw || cv.height !== th) { cv.width = tw; cv.height = th; if (m.swEncode) fileSwProbeUntil = performance.now() + 4000; }   // 0.21.16: the new size is probed again
+      const shown = m.shownRing?.[m.shownRing.length - 1];   // 0.21.95: the frame this draw copies = the element's latest shown one (-> mediaVlagSample)
+      const dr = m.drawRing = m.drawRing || []; dr.push([m.lastDraw, shown && !v.paused && v.playbackRate > 0 && Math.abs(v.currentTime - shown[0]) < 0.1 ? shown[1] : -1]); if (dr.length > 60) dr.shift();
       try { cx.drawImage(v, 0, 0, tw, th); pushCaptureFrame(vtrack); } catch {}   // 0.21.16: push only while hidden or when the automatic capture went quiet (every frame reached the pacer twice: ~48 fps in, 25 out, picture ~2 s behind the sound)
     };
-    const draw = () => {
+    const draw = (_now, meta) => {
       if (!m.alive) return;
+      if (meta && meta.expectedDisplayTime > 0) { const r = m.shownRing = m.shownRing || []; r.push([meta.mediaTime, meta.expectedDisplayTime]); if (r.length > 16) r.shift(); }   // 0.21.95: when the element shows each frame
       drawOnce();
       if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(draw); else requestAnimationFrame(draw);
     };
-    m.timer = setInterval(drawOnce, Math.round(1000 / capFps));   // 0.16.0: the file's cadence
+    m.timer = setInterval(() => drawOnce(), Math.round(1000 / capFps));   // 0.16.0: the file's cadence
+    if (vtrack.__restamped) { vtrack.__tagIn = (arrMs, origUs) => mediaDrawOf(m, arrMs, origUs); vtrack.__tagOut = (shownAt, exitMs) => mediaVlagSample(m, shownAt, exitMs); }   // 0.21.95: the picture's delay -> the sound's stamps
     const wire = () => {
       try {
         m.actx = new AudioContext();
@@ -30763,7 +30767,10 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         src.connect(dest);
         armMediaGapProbe(slot, m, src);   // 0.21.16
         m.atrack = dest.stream.getAudioTracks()[0];
-        pubAud(slot.publish)?.source.set({ track: m.atrack, kind: "music" });
+        // 0.21.95: the sound goes out with the element clock's timestamps (mediaAudioSource); the plain track only if that cannot run
+        const atrack = m.atrack, setAud = (s) => { if (m.alive && m.atrack === atrack) { try { pubAud(slot.publish)?.source.set(s); } catch {} } };
+        if (typeof AudioWorkletNode === "function" && typeof AudioData === "function") mediaAudioSource(m, src).then((s) => setAud(s || { track: atrack, kind: "music" }));
+        else setAud({ track: atrack, kind: "music" });
         m.actx.resume().catch(() => {});
         monitorAttach(slot, m.atrack);   // 0.21.0: the sharer hears the file (the mic tap below never saw this track)
       } catch (e) { log("File audio: " + (e?.message || e)); }
@@ -31254,6 +31261,123 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       const pct = Math.round(upload.loaded / (upload.total || 1) * 100);
       lbl.textContent = e.label + (!onBar && !upload.done && !upload.failed ? " \u2014 uploading " + pct + "%" : "");
     }
+  }
+  // 0.21.95 (Kenton: "The audio is off a bit when sharing media. It is behind the video by about half a second."): the file's
+  // SOUND gets its timestamps here, from the element's own audio graph. Before, the file's audio went element -> this
+  // AudioContext -> a MediaStream track -> the library's capture, which runs a SECOND AudioContext and stamps each block
+  // `zero + samples counted / rate`, zero = performance.now() when its worklet node is made. That context starts rendering
+  // late (lab: 0.25-0.7 s after the node, currentTime still 0) and the track hop between the two contexts buffers on top,
+  // so the sound's stamps sat hundreds of ms off the picture's (the canvas frames are stamped performance.now() as they
+  // leave the pacer). The viewer lines audio and video up by those stamps -- sound early or late by the error, whichever
+  // way it fell on that machine -- and the 0.21.9 adaptive audio delay cannot help: it widens the shared delay for both.
+  // Now a worklet beside the element source hands the library SAMPLES with timestamps: the block's frame on this
+  // context's clock, mapped to performance time by the fastest delivery seen (the arrival of a block is never earlier
+  // than its render; the first MEDIA_ACLOCK_WARM_MS are held back and go out once that offset is known), PLUS the
+  // picture's own delay: a canvas frame is stamped when it leaves the pacer, m.vlag ms after the element showed it
+  // (canvas draw + capture + pacer queue, measured per share by mediaVlagSample; taken once, moved only when it stays
+  // MEDIA_LEAD_MOVE_MS away for MEDIA_LEAD_MOVE_WINS seconds), so the sound carries the same delay and both stamps name
+  // the same moment of the file. Stamps stay back to back (the encoder restarts on any timestamp gap and the viewer
+  // re-times the sound after one, so small error is carried, not chased); a change past MEDIA_ACLOCK_SLACK_MS re-anchors
+  // FORWARD with that much silence, BACKWARD only by dropping the overlap -- a stamp below one already sent closes the
+  // viewer's audio track for good ('group timestamp is below the live edge'). The picture is not held back, and camera /
+  // mic audio is untouched (calls keep their latency).
+  const MEDIA_ACLOCK_WORKLET = "class KastrMediaClock extends AudioWorkletProcessor{constructor(){super();this.b=null;this.n=0;this.f=0;this.on=true;this.port.onmessage=(e)=>{if(e.data==='stop')this.on=false}}"
+    + "process(i){if(!this.on)return false;const c=i[0];if(!c||!c.length)return true;const N=512;"
+    + "if(!this.b||this.b.length!==c.length){this.b=c.map(()=>new Float32Array(N));this.n=0;this.f=currentFrame}"
+    + "for(let k=0;k<c.length;k++)this.b[k].set(c[k],this.n);this.n+=c[0].length;"
+    + "if(this.n>=N){this.port.postMessage({f:this.f,ch:this.b},this.b.map((x)=>x.buffer));this.b=null}return true}}"
+    + "registerProcessor('kastr-media-clock',KastrMediaClock);";
+  const MEDIA_ACLOCK_SLACK_MS = 20, MEDIA_ACLOCK_WIN_MS = 1000, MEDIA_ACLOCK_RAISE_MS = 40, MEDIA_ACLOCK_RAISE_WINS = 5, MEDIA_ACLOCK_WARM_MS = 500, MEDIA_VLAG_MAX_MS = 400, MEDIA_LEAD_MOVE_MS = 30, MEDIA_LEAD_MOVE_WINS = 5, MEDIA_ACLOCK_PAD_MAX_MS = 1000;
+  // the picture's delay, one sample per frame: the pacer's exit stamp minus the moment the element showed the frame
+  // that draw copied (the frame callback's expectedDisplayTime -- the element's sound for the same moment reaches its
+  // audio graph then); m.vlag = the median of the last 91 playing frames (~3 s). No callback (hidden window: rVFC stops) = no
+  // sample, the last value holds.
+  // which draw made a captured frame: the capture's own timestamp (the track's clock, a fixed offset from performance
+  // time -- the smallest arrival minus capture seen) -> the last draw at or before it. Frames reach the pacer several
+  // draws late on a busy page, so "the latest draw" is the wrong one.
+  function mediaDrawOf(m, arrMs, origUs) {
+    if (!m.drawRing || !(origUs >= 0)) return -1;
+    const k = arrMs - origUs / 1000; if (!(m.capOff <= k)) m.capOff = k;
+    const capAt = origUs / 1000 + m.capOff;
+    let hit = null;
+    for (const e of m.drawRing) if (e[0] <= capAt + 2) hit = e; else break;
+    return hit && capAt - hit[0] < 100 ? hit[1] : -1;
+  }
+  function mediaVlagSample(m, shownAt, exitMs) {
+    if (!m.alive || !(shownAt > 0)) return;
+    const r = m.vlagRing = m.vlagRing || []; r.push(exitMs - shownAt); if (r.length > 91) r.shift();
+    if (r.length >= 5) { const o = r.slice().sort((a, b) => a - b); m.vlag = o[o.length >> 1]; }
+  }
+  let mediaAclockUrl = null;
+  // -> a library audio source { samples, sampleRate, channelCount, kind: "music", track } (track = the old element track:
+  // the speaking ring, the mic meter and the sharer's earpiece still find it), or null when this browser cannot run it
+  function mediaAudioSource(m, src) {
+    const ctx = m.actx, rate = ctx.sampleRate, blockMs = (n) => n / rate * 1000;
+    mediaAclockUrl = mediaAclockUrl || URL.createObjectURL(new Blob([MEDIA_ACLOCK_WORKLET], { type: "application/javascript" }));
+    return ctx.audioWorklet.addModule(mediaAclockUrl).then(() => {
+      if (!m.alive || m.actx !== ctx) return null;
+      const node = new AudioWorkletNode(ctx, "kastr-media-clock", { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 2, channelCountMode: "explicit", channelInterpretation: "speakers" });
+      src.connect(node); m.aclockNode = node;
+      const k = m.aclock = { off: null, lead: 0, leadSet: false, leadAway: 0, win: Infinity, winAt: 0, slow: 0, t0: 0, warm: [], next: null, jumps: 0, padded: 0, trimmed: 0, sent: 0, dropped: 0, lastLag: null };
+      let ctl = null;
+      const samples = new ReadableStream({ start(c) { ctl = c; }, cancel() { ctl = null; } }, { highWaterMark: 64 });
+      const put = (ts, n, C, fill) => {
+        if (!ctl || (ctl.desiredSize ?? 0) <= 0) { k.dropped++; return; }
+        try {
+          const buf = new Float32Array(n * C); if (fill) fill(buf);
+          ctl.enqueue(new AudioData({ format: "f32-planar", sampleRate: rate, numberOfFrames: n, numberOfChannels: C, timestamp: Math.round(ts * 1000), data: buf }));
+          k.sent++;
+        } catch { k.dropped++; }
+      };
+      // every stamp follows the last one exactly (the encoder restarts on a gap and the viewer re-times the sound): later
+      // = that much silence first (a real gap past MEDIA_ACLOCK_PAD_MAX_MS -- a stall, a seek -- jumps instead), earlier
+      // = the overlap is dropped
+      const send = (d, startMs, n) => {
+        const want = startMs + k.off + k.lead, C = d.ch.length;
+        let ts = want;
+        if (k.next !== null) {
+          if (want < k.next - MEDIA_ACLOCK_SLACK_MS) { k.trimmed++; return; }   // never below a stamp already sent: skip the overlap
+          if (want > k.next + MEDIA_ACLOCK_SLACK_MS) {
+            if (want - k.next <= MEDIA_ACLOCK_PAD_MAX_MS) { const z = Math.round((want - k.next) * rate / 1000); put(k.next, z, C, null); k.next += blockMs(z); k.padded++; ts = k.next; }
+            else k.jumps++;
+          } else ts = k.next;
+        }
+        k.next = ts + blockMs(n);
+        put(ts, n, C, (buf) => { for (let c = 0; c < C; c++) buf.set(d.ch[c], c * n); });
+      };
+      const leadNow = () => Math.max(0, Math.min(MEDIA_VLAG_MAX_MS, Number(m.vlag) || 0));
+      node.port.onmessage = (e) => {
+        if (!m.alive) return;
+        const d = e.data, now = performance.now(), n = d.ch[0].length, startMs = blockMs(d.f);
+        const lag = now - (startMs + blockMs(n));   // >= the true offset (perf time of context time 0); a busy main thread only adds
+        k.lastLag = lag;
+        if (k.off === null) {   // warming up: hold the blocks, keep the fastest delivery
+          if (!k.t0) k.t0 = now;
+          k.win = Math.min(k.win, lag); k.warm.push([d, startMs, n]);
+          if (now - k.t0 < MEDIA_ACLOCK_WARM_MS) return;
+          k.off = k.win; if (m.vlag != null) { k.lead = leadNow(); k.leadSet = true; } k.win = Infinity; k.winAt = now;
+          for (const w of k.warm.splice(0)) send(w[0], w[1], w[2]);
+          return;
+        }
+        if (lag < k.win) k.win = lag;
+        if (now - k.winAt >= MEDIA_ACLOCK_WIN_MS) {   // each second: a faster delivery lowers the offset; MEDIA_ACLOCK_RAISE_WINS slower seconds in a row = this clock fell behind
+          if (k.win < k.off) { k.off = k.win; k.slow = 0; }
+          else if (k.win > k.off + MEDIA_ACLOCK_RAISE_MS) { if (++k.slow >= MEDIA_ACLOCK_RAISE_WINS) { k.off = k.win; k.slow = 0; } }
+          else k.slow = 0;
+          // the picture's delay is taken once (the first measure) and moved only when it stays MEDIA_LEAD_MOVE_MS away for
+          // MEDIA_LEAD_MOVE_WINS seconds: each move is a stamp jump, and the frame-to-frame wobble is +-1 frame
+          if (m.vlag != null) {
+            const L = leadNow();
+            if (!k.leadSet) { k.lead = L; k.leadSet = true; k.leadAway = 0; }
+            else if (Math.abs(L - k.lead) > MEDIA_LEAD_MOVE_MS) { if (++k.leadAway >= MEDIA_LEAD_MOVE_WINS) { k.lead = L; k.leadAway = 0; } }
+            else k.leadAway = 0;
+          }
+          k.win = Infinity; k.winAt = now;
+        }
+        send(d, startMs, n);
+      };
+      return { samples, sampleRate: rate, channelCount: 2, kind: "music", track: m.atrack };
+    }).catch((err) => { m.aclockError = String(err?.message || err); return null; });
   }
   // 0.21.16: the file share's audio gap probe. A worklet beside the element source (it outputs nothing) reports every
   // run of digital silence >= 10 ms after the first sound -- what an element stall puts into the earpiece and the
@@ -32263,6 +32387,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
             if (st.lastArrive) { const gap = nowMs - st.lastArrive; st.gapMax = Math.max(st.gapMax, gap); st.burst = gap < 5 ? st.burst + 1 : 0; st.burstMax = Math.max(st.burstMax, st.burst); }
             st.lastArrive = nowMs; st.lag = Math.round(nowMs * 1000) - value.timestamp;
             gen.__arrivedAt = nowMs;   // 0.21.16: per-track arrival clock -- a caller pushes only when the automatic capture went quiet
+            if (gen.__tagIn) { try { value.__kastrTag = gen.__tagIn(nowMs, value.timestamp); } catch {} }   // 0.21.95: the caller follows a frame to its exit stamp (media A/V sync)
             if (window.__restampDelayMs) {   // rig: hold frames and hand them over in a batch, like a hidden document does
               st.heldQ = st.heldQ || []; st.heldQ.push([value, nowMs]); st.held = st.heldQ.length;
               if (nowMs - st.heldQ[0][1] < window.__restampDelayMs) continue;
@@ -32280,7 +32405,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
         let f2 = null;
         try { f2 = new VideoFrame(fr, { timestamp: ts, duration: stepUs }); } catch { f2 = null; }
         try { fr.close(); } catch {}
-        if (f2) { st.out++; st.lastNew = ts; writer.write(f2).catch(() => {}); }
+        if (f2) { st.out++; st.lastNew = ts; writer.write(f2).catch(() => {}); if (gen.__tagOut && fr.__kastrTag !== undefined) { try { gen.__tagOut(fr.__kastrTag, ts / 1000); } catch {} } }
       };
       const timer = setInterval(tick, stepMs);   // the app window runs without timer throttling
       gen.getSettings = () => { try { const s0 = track0.getSettings(); return s0.frameRate ? s0 : { ...s0, frameRate: fps }; } catch { return {}; } };   // 0.21.16: the pacer's rate when the capture has none (captureStream(0))
@@ -35005,7 +35130,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const bufInfo = { ahead: +((m.ahead || 0).toFixed(2)), rebuffering: !!m.rebuffering, rebuffers: m.rebuffers || 0, primed: !!m.primed, userPaused: !!m.userPaused, lowQ: !!m.lowQ, encoder: m.encoder || null,
       capFps: m.capFps || null, srcFps: m.srcFps || null, encFps: m.encFps == null ? null : +m.encFps.toFixed(1), encKbps: m.encKbps == null ? null : Math.round(m.encKbps), cpuHint: (m.encFps == null || !m.capFps) ? null : +(m.encFps / m.capFps).toFixed(2) };   // 0.15.0/0.15.1/0.16.0
     const audInfo = { actx: m.actx?.state || null, atrack: m.atrack ? { readyState: m.atrack.readyState, enabled: m.atrack.enabled, muted: m.atrack.muted } : null, elMuted: v.muted, elVolume: v.volume, audioDecoded: v.webkitAudioDecodedByteCount ?? null, pubMuted: !!s.publish?.muted,   // 0.15.1 rig
-      audioGaps: (m.audioGaps || []).slice(-20), gapCount: m.gapCount || 0, gapProbe: !!m.gapNode, gapProbeError: m.gapProbeError || null, swEncode: !!m.swEncode,   // 0.21.16
+      audioGaps: (m.audioGaps || []).slice(-20), gapCount: m.gapCount || 0, gapProbe: !!m.gapNode, gapProbeError: m.gapProbeError || null, swEncode: !!m.swEncode,
+      aclock: m.aclock ? { off: m.aclock.off == null ? null : +m.aclock.off.toFixed(1), lead: +m.aclock.lead.toFixed(1), jumps: m.aclock.jumps, padded: m.aclock.padded, trimmed: m.aclock.trimmed, sent: m.aclock.sent, dropped: m.aclock.dropped, lastLag: m.aclock.lastLag == null ? null : +m.aclock.lastLag.toFixed(1) } : null, vlag: m.vlag == null ? null : +m.vlag.toFixed(1), aclockError: m.aclockError || null,   // 0.21.16; 0.21.95 the sound's clock
       encoderEvents: wcLog.slice(-12).map((x) => [Math.round(x[0]), x[1], x[2], x[3]]) };
     return { id: s.entry.mediaId || null, stream: !!m.stream, plan: m.plan || null, ttff: m.ttff ?? null, bytes: m.bytes || 0, reopens: m.reopens || 0, restarts: m.log || [], finished: !!m.finished, buffered: b, startAt: m.startAt ?? null,   // 0.21.0: + startAt
       t: +(v.currentTime || 0).toFixed(2), dur: v.duration, mdur: m.dur || 0, eof: !!m.eof, failed: !!m.failed, mime: m.mime || null, wait409: m.wait409 ?? null,

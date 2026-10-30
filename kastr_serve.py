@@ -1266,10 +1266,16 @@ def fmp4_start(buf):
     -copyts + delay_moov after an input seek. ffmpeg's mp4 muxer starts every track's decode time at 0 and
     records the seek offset as an EMPTY EDIT (media_time -1, duration in mvhd units) -- which MSE ignores, so
     a seek to 90 s used to buffer at 0 and the page 'restarted from the beginning'. The start is read off
-    that edit; every edts box is renamed 'free' (same size, no re-layout) so browsers never apply it twice.
-    A head without an edit list (t = 0, or a muxer that wrote none) returns 0.0 and the bytes untouched."""
-    start = 0.0
-    mvts = 1000
+    that edit and the page puts it in the SourceBuffer's timestampOffset.
+    0.21.95 (Kenton: converted media "audio is off"): each track's edit ALSO carries its own media_time -- the
+    video's B-frame delay (2 frames = 67 ms for x264 / a copied H.264 or HEVC) and the AAC encoder's priming
+    (1024 samples = 21 ms). 0.21.0 renamed every edts box to 'free', so the browser lost both: every converted
+    file played its picture ~46 ms late against its sound on the sharer, and the whole share carried it. Now
+    each track's edit list is rewritten to ONE normal entry (what Chromium's MSE parser applies) whose
+    media_time folds in that track's empty edit relative to the common start S = the latest
+    (empty edit - media_time) of all tracks, so one timestampOffset (S) places both tracks right. The box keeps
+    its size (the dropped entries become a 'free' box inside edts). A head without an edit list returns 0.0 and
+    the bytes untouched."""
     out = bytearray(buf)
 
     def boxes(off, end):
@@ -1288,31 +1294,63 @@ def fmp4_start(buf):
             yield typ, off, off + hdr, min(end, off + size)
             off += size
 
+    def timescale(a, e):   # mvhd / mdhd: version 0 -> u32 at 12, version 1 -> u32 at 20
+        return struct.unpack(">I", buf[a + 12:a + 16])[0] if buf[a] == 0 else struct.unpack(">I", buf[a + 20:a + 24])[0]
+
     try:
+        tracks = []   # [elst_off, elst_end, version, track timescale, empty edit (s), media_time (track units), seg_dur]
+        mvts = 1000
         for typ, _o, a, e in boxes(0, len(buf)):
             if typ != b"moov":
                 continue
             for t2, _o2, a2, e2 in boxes(a, e):
                 if t2 == b"mvhd" and e2 - a2 >= 24:
-                    v = buf[a2]
-                    mvts = struct.unpack(">I", buf[a2 + 12:a2 + 16])[0] if v == 0 else struct.unpack(">I", buf[a2 + 20:a2 + 24])[0]
+                    mvts = timescale(a2, e2) or 1000
             for t2, _o2, a2, e2 in boxes(a, e):
                 if t2 != b"trak":
                     continue
+                tts, el = 0, None
                 for t3, o3, a3, e3 in boxes(a2, e2):
-                    if t3 != b"edts":
-                        continue
-                    for t4, _o4, a4, e4 in boxes(a3, e3):
-                        if t4 == b"elst" and e4 - a4 >= 8:
-                            v = buf[a4]
-                            n = struct.unpack(">I", buf[a4 + 4:a4 + 8])[0]
-                            q = a4 + 8
-                            if n >= 1 and q + (16 if v == 1 else 8) <= e4:
-                                sd, mt = struct.unpack(">Qq", buf[q:q + 16]) if v == 1 else struct.unpack(">Ii", buf[q:q + 8])
-                                if mt == -1 and mvts:
-                                    start = max(start, sd / float(mvts))
-                    out[o3 + 4:o3 + 8] = b"free"
+                    if t3 == b"mdia":
+                        for t4, _o4, a4, e4 in boxes(a3, e3):
+                            if t4 == b"mdhd" and e4 - a4 >= 24:
+                                tts = timescale(a4, e4)
+                    if t3 == b"edts":
+                        for t4, o4, a4, e4 in boxes(a3, e3):
+                            if t4 == b"elst" and e4 - a4 >= 8:
+                                el = (o4, a4, e4)
+                if not el or not tts:
+                    continue
+                o4, a4, e4 = el
+                v = buf[a4]
+                n = struct.unpack(">I", buf[a4 + 4:a4 + 8])[0]
+                esz = 20 if v == 1 else 12
+                if n < 1 or a4 + 8 + n * esz > e4:
+                    continue
+                empty, mt, seg = 0.0, 0, 0
+                for i in range(n):
+                    q = a4 + 8 + i * esz
+                    sd, m = struct.unpack(">Qq", buf[q:q + 16]) if v == 1 else struct.unpack(">Ii", buf[q:q + 8])
+                    if m == -1:
+                        empty += sd / float(mvts)
+                    else:
+                        mt, seg = m, sd
+                        break
+                tracks.append([o4, a4, e4, v, tts, empty, mt, seg, n])
             break
+        if not tracks:
+            return 0.0, buf
+        start = max(0.0, max(tr[5] - tr[6] / float(tr[4]) for tr in tracks))
+        for o4, a4, e4, v, tts, empty, mt, seg, n in tracks:
+            m2 = max(0, int(round(mt - (empty - start) * tts)))
+            esz = 20 if v == 1 else 12
+            q = a4 + 8
+            out[a4 + 4:a4 + 8] = struct.pack(">I", 1)
+            out[q:q + esz] = struct.pack(">QqhH", seg, m2, 1, 0) if v == 1 else struct.pack(">IihH", min(seg, 0xFFFFFFFF), m2, 1, 0)
+            if n > 1:   # the dropped entries -> a 'free' box beside the elst (same edts size, no re-layout)
+                end1 = q + esz
+                out[o4:o4 + 4] = struct.pack(">I", end1 - o4)
+                out[end1:end1 + 8] = struct.pack(">I4s", e4 - end1, b"free")
     except (struct.error, IndexError, ValueError):
         return 0.0, buf
     return start, bytes(out)

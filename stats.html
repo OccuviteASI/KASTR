@@ -8,6 +8,7 @@
 	<title>Relay Stats — KASTR</title>
 
   <script src="/assets/client.js"></script>
+  <script src="/assets/prefs.js"></script><!-- 0.21.95: the theme + accent the app keeps (a stats page opened in another browser on this machine follows it too) -->
   <script src="/assets/vault.js"></script><!-- 0.21.92: the saved code and the browse tokens are kept wrapped (AES-GCM, a non-extractable key) -->
   <script>/* 0.21.92 (Kenton: "Room names must not be visible to anyone without a fleet access code"): the relay's ~stats name
      every room, so they ride a token. This page asks for an access code of this fleet (or reuses the one KASTR saved on this
@@ -99,6 +100,76 @@
   <link rel="stylesheet" crossorigin href="/assets/reload-BuioQcCC.css">
 	<link rel="icon" type="image/svg+xml" href="/assets/asi-favicon.svg">
 	<link rel="stylesheet" href="/assets/asi-brand.css">
+	<!-- 0.21.95 (Kenton: "add the stats.html fix to the next update"): the page was unreadable in the Light theme -- the vendored
+	     Tailwind build and the stats bundle are dark-only (neutral-900 cards, white/neutral-300 text, hex colours in the SVG charts).
+	     This block is the page's ONLY colour source: it maps every Tailwind colour the page and the bundle use onto the app's theme
+	     tokens (assets/asi-brand.css: --bg/--surface/--line/--text*, the 8 themes via html[data-theme]/[data-palette], Custom
+	     inline, the accent --asi-blue), so it follows the theme chosen on the main page (localStorage kastr.theme, kept live by
+	     asi-brand.js's storage listener). Dark keeps the bundle's own chart colours; light grounds get darker data colours.
+	     The bundle stays byte-identical: its SVG presentation attributes are overridden by CSS (any CSS beats an attribute). -->
+	<style id="kastrStatsTheme">
+		:root {
+			/* text + lines + surfaces: the theme tokens (dark values sit within a shade of the old neutral greys) */
+			--color-white: var(--text);
+			--color-neutral-200: var(--text);
+			--color-neutral-300: color-mix(in srgb, var(--text) 90%, var(--text-dim));
+			--color-neutral-400: var(--text-dim);
+			--color-neutral-500: color-mix(in srgb, var(--text-dim) 55%, var(--text-mute));
+			--color-neutral-600: var(--text-mute);
+			--color-neutral-700: color-mix(in srgb, var(--line) 55%, var(--text-mute));
+			--color-neutral-800: var(--line);
+			--color-neutral-900: var(--surface);
+			--color-neutral-950: var(--bg);
+			/* focus + the selected node card: this app's accent */
+			--color-emerald-600: var(--asi-blue);
+			/* the charts: egress / ingress / the base line (dark = the bundle's own colours) */
+			--st-egress: #34d399;
+			--st-ingress: #38bdf8;
+			--st-axis: var(--color-neutral-700);
+		}
+		/* light grounds (Light, Warm light, a light Custom): data colours dark enough to read on white (>= 4.5:1 for text) */
+		:root[data-theme="light"] {
+			/* the label greys closer to --text-dim: a light Custom theme's --text-mute is mixed half-way to its ground */
+			--color-neutral-500: color-mix(in srgb, var(--text-dim) 92%, var(--text-mute));
+			--color-neutral-600: color-mix(in srgb, var(--text-dim) 60%, var(--text-mute));
+			--color-emerald-300: #046c4e;
+			--color-emerald-400: #047857;
+			--color-emerald-800: #6ee7b7;
+			--color-sky-300: #075985;
+			--color-sky-400: #0369a1;
+			--color-amber-300: #92400e;
+			--color-amber-400: #b45309;
+			--color-amber-800: #fcd34d;
+			--color-red-300: #b91c1c;
+			--color-red-400: #dc2626;
+			--color-red-800: #fca5a5;
+			--st-egress: #047857;
+			--st-ingress: #0369a1;
+		}
+		body.asi-upstream { color: var(--text); }
+		/* cards and fields on the theme's surfaces (solid: a half-clear card vanished on a light ground) */
+		body.asi-upstream .bg-neutral-900\/50 { background-color: var(--surface); }
+		body.asi-upstream .bg-neutral-900 { background-color: var(--surface-2); }
+		body.asi-upstream .border-neutral-900 { border-color: var(--line-soft); }
+		body.asi-upstream input::placeholder { color: var(--text-mute); opacity: 1; }
+		/* the bundle runs highlight.js over <code> (its theme is dark-only) */
+		body.asi-upstream code.hljs { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--line); border-radius: 4px; }
+		/* the SVG charts + sparklines: the bundle writes stroke / stop-color attributes */
+		body.asi-upstream svg [stroke="#34d399"] { stroke: var(--st-egress); }
+		body.asi-upstream svg [stop-color="#34d399"] { stop-color: var(--st-egress); }
+		body.asi-upstream svg [stroke="#38bdf8"] { stroke: var(--st-ingress); }
+		body.asi-upstream svg [stop-color="#38bdf8"] { stop-color: var(--st-ingress); }
+		body.asi-upstream svg [stroke="#404040"] { stroke: var(--st-axis); }
+		/* the "Other demos" footer (Tailwind Typography, inverted for html.dark) */
+		body.asi-upstream .prose-doc { --tw-prose-body: var(--text-dim); --tw-prose-headings: var(--text); --tw-prose-links: var(--asi-blue);
+			--tw-prose-bold: var(--text); --tw-prose-bullets: var(--text-mute); --tw-prose-counters: var(--text-mute); --tw-prose-code: var(--text); }
+		/* links: the accent as text is too light on a light ground (ASI blue 2.7:1, a yellow accent 1.5:1) -- half-way to the text colour */
+		:root[data-theme="light"] body.asi-upstream .prose-doc a { color: color-mix(in srgb, var(--asi-blue) 45%, var(--text)); }
+		/* the access-code card */
+		body.asi-upstream .st-go { background: var(--asi-blue); color: var(--on-accent); border-color: transparent; }
+		body.asi-upstream .st-go:hover { background: var(--asi-blue-dim); }
+		body.asi-upstream .st-err { color: var(--asi-red); }
+	</style>
 	<script type="module" src="/assets/asi-brand.js"></script>
 </head>
 
@@ -123,9 +194,8 @@
 		<form id="kastrLockForm" class="flex flex-wrap items-center gap-2" autocomplete="off">
 			<input id="kastrLockCode" type="password" spellcheck="false" placeholder="Access code" aria-label="Access code" autocomplete="off"
 				class="w-64 max-w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-emerald-600">
-			<button type="submit" class="rounded-md px-3 py-1.5 text-sm font-medium border border-neutral-700"
-				style="background: var(--asi-blue, #2f7de1); color: #ffffff;">Show stats</button>
-			<span id="kastrLockMsg" hidden role="alert" class="text-xs" style="color: var(--asi-red, #f87171);"></span>
+			<button type="submit" class="st-go rounded-md px-3 py-1.5 text-sm font-medium border">Show stats</button>
+			<span id="kastrLockMsg" hidden role="alert" class="st-err text-xs"></span>
 		</form>
 	</section>
 

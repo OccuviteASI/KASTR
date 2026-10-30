@@ -9979,6 +9979,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     for (const [n, t] of tiles) {
       if (isGridChild(n) || wrRoomOf(n) || t.cg || cgHide(n)) continue;   // 0.21.44: a watched room's people are not in my meeting; 0.21.66: nor a grid of cameras
       if (roomHid.has(n)) continue;   // 0.21.64: nor a camera the room removed from its grid
+      if (isLibPath(n)) continue;   // 0.21.95 (Kenton: "I don't want the library 'users' to show up in the people page"): a library stream is no person
       const key = personKeyOf(n);
       if (key === "?") continue;
       const p = get(key);

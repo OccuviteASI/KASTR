@@ -3137,6 +3137,8 @@
     <!-- 0.21.75 (Kenton: "everyone can have a personal room that no other user sees") -->
     <button class="opt" id="optMyRoom" type="button" title="Your own room: your views of feeds from any room, only you see it, on any device"><span class="oi">&#9733;</span>My room&hellip;</button>
     <!-- 0.21.92 (Kenton: meeting templates): saved room set-ups -- this room's and my own (assets/kastr-templates.js shows it on a relay with access codes) -->
+    <!-- 0.21.96 (Kenton: scheduled meetings): one-time, daily or weekly meetings -- the ones I am invited to (assets/kastr-meetings.js) -->
+    <button class="opt" id="optMeet" type="button" hidden title="Scheduled meetings -- the ones you are invited to, and scheduling your own"><span class="oi">&#128197;</span>Meetings&hellip;</button>
     <button class="opt" id="optTpl" type="button" hidden title="Saved set-ups of a room -- pins, spotlights, grids, settings, invites -- to put back or reuse"><span class="oi">&#9636;</span>Templates&hellip;</button>
     <!-- 0.21.83 (D) (Kenton: "how would I access this from my own KASTR?"): fleet admins only -->
     <button class="opt" id="optMachines" type="button" hidden title="Relays, hubs and camera boxes that let fleet admins control them without asking"><span class="oi">&#128421;</span>Machines&hellip;</button>
@@ -3822,6 +3824,12 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   const PERSONAL_RE = /^me-[0-9a-f]{12}$/;
   const isPersonalSlug = (s) => PERSONAL_RE.test(String(s || ""));
   window.__isPersonalSlug = isPersonalSlug;   // module 2
+  // 0.21.96 (Kenton: scheduled meetings): a scheduled meeting's own room (mt-<12 hex>) -- hidden like My room (never listed, never
+  // announced, no public presence / state); the hub lets in only its invited people and its link guests, inside its windows
+  const MEET_RE = /^mt-[0-9a-f]{12}$/;
+  const isMeetSlug = (s) => MEET_RE.test(String(s || ""));
+  const isHiddenSlug = (s) => isPersonalSlug(s) || isMeetSlug(s);
+  window.__isHiddenSlug = isHiddenSlug;   // module 2
   // 0.21.78: someone else's personal room (shared with me, an invite to it) reads "<owner>'s room"; mine stays "My room"
   const personalOwners = new Map();   // slug -> its owner's name (my beats' `shared`, a guest mint, an invite)
   const personalTitle = (slug) => {
@@ -3830,7 +3838,8 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const o = personalOwners.get(slug);
     return mine || (!o && !window.__personal) ? "My room" : o ? o + "\u2019s room" : "Private room";
   };
-  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug) : String(slug || ""));
+  const roomTitle = (slug) => (slug === LOBBY ? "Lobby" : isPersonalSlug(slug) ? personalTitle(slug)
+    : isMeetSlug(slug) ? (window.__kmeet?.title?.(slug) || "Meeting") : String(slug || ""));   // 0.21.96: a meeting's room reads its title
   // 0.21.75 (Kenton: a Publisher box that "only shares its cameras into the rooms I pick"): such a box sits in its own hidden
   // HOME room box-<host slug> (kastr_rtsp.home_room is the same rule) -- it joins it like any room (its auto-join, restore and
   // the box keeper keep working); no list shows a box-* room and nobody can create one.
@@ -5494,7 +5503,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try {
       const p = personalGet(), s = String(path || ""), from = s.split("/", 1)[0];
       return !!p && joinState === "joined" && CHANNEL !== p.slug && !publishOnly && !!authBase() && ROOM_RE.test(from) && from !== LOBBY
-        && !isPersonalSlug(from) && s.split("/").length >= 3 && !s.includes("/cgrid-0000/");
+        && !isHiddenSlug(from) && s.split("/").length >= 3 && !s.includes("/cgrid-0000/");   // 0.21.96: + a meeting's room
     } catch { return false; }
   }
   async function personalPin(path) {
@@ -10369,7 +10378,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const joined = joinState === "joined";
     for (const p of roomsPres.values()) {
       const w = p.who;
-      if (!w || !alive(p) || presenceHidden(w) || !ROOM_RE.test(p.slug) || isPersonalSlug(p.slug)) continue;
+      if (!w || !alive(p) || presenceHidden(w) || !ROOM_RE.test(p.slug) || isHiddenSlug(p.slug)) continue;   // 0.21.96: + a meeting's room
       const op = String(w.op || "").toLowerCase() || ("peer:" + w.peer);
       const key = p.slug + "|" + op;
       let x = people.get(key);
@@ -14900,7 +14909,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     roomsMinter.clear();
     for (const r of got.rooms) {
       const slug = channelSlug(String(r?.slug || ""));
-      if (!slug || !ROOM_RE.test(slug) || slug === "main" || isPersonalSlug(slug)) continue;   // 0.21.75
+      if (!slug || !ROOM_RE.test(slug) || slug === "main" || isHiddenSlug(slug)) continue;   // 0.21.75 (0.21.96: + a meeting's room)
       roomsMinter.set(slug, { slug, locked: r.locked !== false && (r.locked === true || r.persistent !== true),
                               persistent: !!r.persistent, creator: r.creator || "", created: Number(r.created) || 0, at: Number(r.at) || 0,
                               viewLock: !!r.viewLock, keptBy: r.keptBy || "", tplClose: !!r.tplClose });   // 0.21.65: + the view lock, kept by the board; 0.21.92: + a template's room End closes
@@ -15037,7 +15046,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // 0.21.75: a box's home room (any box-* room, or one whose only occupants are boxes that call it home) is in no list --
     // rails, the gate, watch-room and show-in-rooms pickers -- except, for the box itself, the room it is in
     const inNow = (() => { try { return joinState === "joined" ? CHANNEL : ""; } catch { return ""; } })();
-    const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main" && !isPersonalSlug(r.slug)   // 0.21.75: never a personal room (mine is its own card)
+    const list = roomOrder([...rooms.values()].filter((r) => r.slug !== "main" && !isHiddenSlug(r.slug)   // 0.21.75: never a personal room (mine is its own card); 0.21.96: nor a meeting's
       && (r.slug === inNow || !(isHomeRoom(r.slug) || (homeOnly.has(r.slug) && !r.members.size)))));   // 0.13.1: the operator's order, then alphabetical
     return [rooms.get("main"), ...list].map((r) => ({
       slug: r.slug, locked: r.locked, salt: r.salt, hash: r.hash, source: r.source, since: r.since, talking: r.talking, video: !!r.video,
@@ -15069,7 +15078,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // announces tolerate several holders). The old single-holder rule read a
     // cached list that still showed our own just-cancelled ember, took the
     // clear() branch, and the room's passcode silently vanished.
-    if (chan !== "main" && !isPersonalSlug(chan)) {   // 0.21.75: My room holds no registry record (nobody learns it exists)
+    if (chan !== "main" && !isHiddenSlug(chan)) {   // 0.21.75: My room holds no registry record (nobody learns it exists); 0.21.96: nor a meeting's room
       const mine = myChannels().find((r) => r.slug === chan);
       // 0.12.0: the remembered record carries the roomKey (heartbeats, Close room);
       // the listed one carries the live lock/kept flags -- take both.
@@ -18639,6 +18648,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                                  host: HOST_RE.test(HOSTNAME1) ? HOSTNAME1 : undefined,   // 0.13.0: identity-scoped claims (omitted -> wide 0.12 token)
                                  admit: admTok,   // 0.21.89: let in by someone in the room (this visit)
                                  op: String(window.__publisher?.opSlug?.() || "").toLowerCase() || undefined,   // 0.21.92 I: remove / ban -- a Ban covers my name too
+                                 meet: invTok ? undefined : (window.__kmeet?.creds?.(room) || undefined),   // 0.21.96: a scheduled meeting -- who I am (name + My room code)
                                  invite: invTok }),   // 0.21.75
         });
         break;
@@ -18652,6 +18662,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (invTok && !(r.ok && d.ok) && /^(expired|revoked|wrong)$/.test(String(d.invite || ""))) inviteSet(null);   // 0.21.75: a dead link is dropped
     if (admTok && !(r.ok && d.ok) && /^(expired|wrong|room)$/.test(String(d.admit || ""))) accGrantSet(null);   // 0.21.89: that visit is over
     if ((!r.ok || !d.ok) && d.ban && typeof d.ban === "object") throw Object.assign(new Error(d.error || ("token refused (" + r.status + ")")), { ban: d.ban });   // 0.21.92 I: remove / ban -- + the ban
+    if ((!r.ok || !d.ok) && d.meet && typeof d.meet === "object") throw Object.assign(new Error(d.error || ("token refused (" + r.status + ")")), { meet: d.meet, status: r.status });   // 0.21.96: a meeting's lobby (early, waiting for the host)
     if (!r.ok || !d.ok) throw new Error(d.error || ("token refused (" + r.status + ")"));
     if (invTok && d.invite?.id) inviteSet({ ...inv, id: d.invite.id, exp: Number(d.invite.exp) || 0 });   // 0.21.75
     { const g = accGrantGet(); if (g && g.room !== room) accGrantSet(null); }   // 0.21.89: in another room now -- that visit is over (asking again next time)
@@ -18668,6 +18679,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
       sessionStorage.setItem(authStoreKey(),
         JSON.stringify({ room, code: authRoomCode, access: authAccessCode, role: authRole, tokens: authTokens, exp: authExp, state: authState, ns: authNs, personal: authPersonal, guest: authGuest, co: authCo }));
     } catch {}
+    try { window.__kmeet?.minted?.(room, d.meet || null, !!d.guest); } catch {}   // 0.21.96: in a scheduled meeting (its template, its beat)
     // the publish half re-posts its native feeds with the fresh token and follows the role
     try { window.dispatchEvent(new CustomEvent("kastr:auth", { detail: { role: authRole, room } })); } catch {}
     return d;
@@ -19297,7 +19309,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     // never tries (0.10.0).
     canPublish: () => !authSecured || authRole !== "viewer",
     canAnnounce: (kind) => (!authSecured || authRole !== "viewer" || VIEWER_KINDS.includes(kind))
-      && !(isPersonalSlug(CHANNEL) && ["~presence", "~talking", "~chat"].includes(kind)),   // 0.21.75: My room says nothing in public
+      && !(isHiddenSlug(CHANNEL) && ["~presence", "~talking", "~chat"].includes(kind)),   // 0.21.75: My room says nothing in public (0.21.96: a meeting's room neither)
     refresh: async () => {
       if (!authSecured || !authTokens) return;
       try { await authMint(readChannel(), authAccessCode, authRoomCode); } catch {}
@@ -19403,7 +19415,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
                      kv: KASTR_VER };   // 0.21.49: which KASTR this page runs (absent = older than 0.21.49)
   if (HC_RE.test(profile?.color || "")) pubModel.hc = profile.color;   // 0.21.61
   const roomModel = { v: 1, peer: "", spots: [], unspots: [], spotlits: [], recording: null, stalled: [], ctl: null, admin: null, grids: {}, media: {}, files: [] };   // 0.16.0: + admin   // 0.15.0: grids by path
-  const pubState = stateProducer(() => (isPersonalSlug(CHANNEL) ? "" : "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer()), ["state.json"]);   // 0.21.75: no public state in My room
+  const pubState = stateProducer(() => (isHiddenSlug(CHANNEL) ? "" : "~state/" + CHANNEL + "/" + HOSTNAME1 + "/" + statePeer()), ["state.json"]);   // 0.21.75: no public state in My room (0.21.96: nor a meeting's room)
   // 0.21.83: + pt.json -- my pointer on someone's share (pointer mode): the newest value is all that matters (255, 2 s)
   const roomState = stateProducer(() => CHANNEL + "/" + HOSTNAME1 + "/~member/" + statePeer(), ["room.json", "chat.json", "pt.json"], { tracks: { "pt.json": { priority: 255, maxAge: 2000 } } });
   let pubJson = "", roomJson = "", ctlClearT = null, adminClearT = null;   // 0.16.0: + admin
@@ -19413,7 +19425,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     const pj = JSON.stringify(pubModel); if (pj !== pubJson) { pubJson = pj; pubState.set("state.json", pubModel); }
     // 0.21.86 (Kenton: in My room the presentation found nobody to make backstage, and People showed initials): My room has no
     // public state records, so each page names itself in room.json -- read by the room's members only, never listed
-    roomModel.who = isPersonalSlug(CHANNEL) ? { op: pubModel.op || "", name: pubModel.name || "", avatar: pubModel.avatar || "", mode: pubModel.mode || "",
+    roomModel.who = isHiddenSlug(CHANNEL) ? { op: pubModel.op || "", name: pubModel.name || "", avatar: pubModel.avatar || "", mode: pubModel.mode || "",   // 0.21.96: + a meeting's room
                                                  joinedAt: pubModel.joinedAt || 0, publishing: (pubModel.publishing || []).slice(0, 32) } : null;
     const rj = JSON.stringify(roomModel); if (rj !== roomJson) { roomJson = rj; roomState.set("room.json", roomModel); }
   }
@@ -19726,7 +19738,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     try { window.__presMember?.(path, v); } catch {}   // 0.21.84 (prototype): presentations -- their pres / presCtl / presPk
     {   // 0.21.86: My room -- the member record its pages give in room.json (elsewhere it comes from their public state record)
       const pp = String(path).split("/"), w = v.who;
-      if (isPersonalSlug(CHANNEL) && w && typeof w === "object" && pp[0] === CHANNEL && pp[2] === "~member" && pp[3]) {
+      if (isHiddenSlug(CHANNEL) && w && typeof w === "object" && pp[0] === CHANNEL && pp[2] === "~member" && pp[3]) {   // 0.21.96: + a meeting's room
         const av = String(w.avatar || "");
         const rec = { peer: pp[3], op: String(w.op || "").slice(0, 64), name: String(w.name || "").slice(0, 60), relay: "", relayName: "", ts: Number(w.joinedAt) || 0, host: pp[1],
                       typing: false, speaking: false, avatar: /^https?:\/\/[^\s"'<>]+\/api\/files\/[\w-]+$/.test(av) ? av : "",
@@ -22996,7 +23008,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     if (authSecured) {
       // 0.10.0: the cached relay access code plus the room's own code
       try { await authMint(rec.slug, authAccessCode, code ?? ""); switchMark("mint"); }
-      catch (e) { log("Room switch refused: " + (e?.message || e)); window.__toast?.(e?.ban?.kind === "ban" ? rbBannedText(rec.slug, e.ban) : "Could not join " + roomTitle(rec.slug) + ": " + (e?.message || e), 6000, { level: "warn" }); return; }   // 0.21.42: said, and nothing; 0.21.92 I: + banned muted; 0.21.78: its title
+      catch (e) { log("Room switch refused: " + (e?.message || e)); if (e?.meet) { try { if (window.__kmeet?.refused?.(rec.slug, e.meet, () => switchRoom(rec, code, opts))) return; } catch {} } window.__toast?.(e?.ban?.kind === "ban" ? rbBannedText(rec.slug, e.ban) : "Could not join " + roomTitle(rec.slug) + ": " + (e?.message || e), 6000, { level: "warn" }); return; }   // 0.21.42: said, and nothing; 0.21.92 I: + banned muted; 0.21.78: its title
     }
     // 0.21.41 (Kenton: "When changing rooms, mute mic and disable camera"): you arrive in the next room muted with the camera off
     if (!isPublisherMode() && !opts?.follow) {   // 0.21.65: following a renamed room is not changing rooms
@@ -24167,6 +24179,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
           return joinFail("My room did not open with the code this device remembered \u2014 pick a room and join; My room asks for its code again.");
         }
         if (e?.ban?.kind === "ban") return joinFail(rbBannedText(slug, e.ban));   // 0.21.92 I: remove / ban
+        if (e?.meet) { try { window.__kmeet?.refused?.(slug, e.meet, () => joinEls.joinBtn?.click()); } catch {} return joinFail(msg.replace(/ -- /g, " \u2014 ")); }   // 0.21.96: a meeting's lobby
         return joinFail(/removed from this room/i.test(msg) ? "You were removed from this room by an admin \u2014 try again later."   // 0.17.0
           : /wrong access code/i.test(msg) ? "Wrong access code for this relay."
           : /wrong room code/i.test(msg) ? "Wrong room code."
@@ -25927,7 +25940,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     createRoom: async (name) => {
       const slug = channelSlug(String(name || ""));
       if (!String(name || "").trim() || slug === "main" || slug === LOBBY || !ROOM_RE.test(slug)) return { ok: false, error: "Name the room first." };
-      if (isHomeRoom(slug) || isPersonalSlug(slug) || slug === "lib") return { ok: false, error: "That name is kept for something else \u2014 pick another name." };
+      if (isHomeRoom(slug) || isHiddenSlug(slug) || slug === "lib") return { ok: false, error: "That name is kept for something else \u2014 pick another name." };   // 0.21.96: + mt-
       if (lastChannelList.some((r) => r.slug === slug) || roomsMinter.has(slug)) return { ok: false, taken: true, error: "A room named \u201c" + slug + "\u201d already exists \u2014 pick another name." };
       const rec = await createChannelRecord(slug, "", false);
       const g = await registerRoomRec(rec, authAccessCode);
@@ -25962,6 +25975,14 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     myRoomDialog: () => personalDialog(),
     phone: () => { try { return isPhone(); } catch { return false; } },
     view: { snap: tplViewSnap, apply: tplViewApply },
+  };
+  // 0.21.96 (Kenton: scheduled meetings): assets/kastr-meetings.js reads the page through window.__ktpl and these
+  window.__kmeetPage = {
+    isMeet: (s) => isMeetSlug(s), isHidden: (s) => isHiddenSlug(s),
+    leave: (title, message) => forcedToMain(title, message),
+    joinedAny: () => joinState === "joined",
+    tz: () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } },
+    templates: () => window.__tplUI || null,
   };
 </script>
 
@@ -34058,7 +34079,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
   }
   function chanRegSet(rec) {
     chanRegClear();
-    if (!rec || !rec.slug || rec.slug === "main" || window.__isPersonalSlug?.(rec.slug)) return;   // 0.21.75: My room is never announced
+    if (!rec || !rec.slug || rec.slug === "main" || (window.__isHiddenSlug || window.__isPersonalSlug)?.(rec.slug)) return;   // 0.21.75: My room is never announced (0.21.96: nor a meeting's room)
     emberClear(rec.slug);          // holding for real replaces the ember
     const secured = !!window.__auth?.secured;
     // Secured relays announce only the LOCKED marker: the minter is the
@@ -34102,7 +34123,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
     embers.delete(slug);
   }
   function chanEmber(rec) {
-    if (!rec || !rec.slug || rec.slug === "main" || window.__isPersonalSlug?.(rec.slug)) return;   // 0.21.75
+    if (!rec || !rec.slug || rec.slug === "main" || (window.__isHiddenSlug || window.__isPersonalSlug)?.(rec.slug)) return;   // 0.21.75 (0.21.96)
     emberClear(rec.slug);
     try {
       const path = (rec.hash || rec.locked)   // 0.8.6: see chanRegSet
@@ -35427,6 +35448,7 @@ try { var g = document.currentScript.parentElement, l = localStorage, s = sessio
 <script src="/assets/kastr-pmreset.js"></script><!-- 0.21.91 passcode reset: the admin's Reset My room passcode dialog -->
 <script type="module" src="/assets/kastr-msg.js"></script>
 <script type="module" src="/assets/kastr-templates.js"></script>
+<script type="module" src="/assets/kastr-meetings.js"></script>
 <script type="module" src="/assets/kastr-presrec.js"></script><!-- 0.21.92 H: record the presentation (the switch, Recordings, the relay host's recorder page) -->
 <script type="module" src="/assets/kastr-pres.js"></script>
 </body>

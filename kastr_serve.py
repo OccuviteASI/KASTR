@@ -1593,8 +1593,8 @@ def chat_sweep_once(relay_srv=None):
         return []
     rs = relay_srv if relay_srv is not None else _CHAT_RELAY[0]
     kept = set()
-    try:
-        kept = set(rs.store.kept_slugs())
+    try:   # 0.21.96: + every scheduled meeting's own room (its chat stays from one occurrence to the next)
+        kept = set(getattr(rs.store, "chat_kept_slugs", rs.store.kept_slugs)())
     except Exception:
         pass
     return store.sweep(kept)
@@ -3724,6 +3724,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     to = 320
                 elif path0 == "/api/templates":  # 0.21.92: meeting templates (a spoke asks the hub; an apply runs many board ops there)
                     to = 40
+                elif path0 in ("/api/meetings", "/api/meetings/ics"):   # 0.21.96: scheduled meetings (a spoke asks the hub)
+                    to = 25
                 elif path0 == "/api/people":     # 0.21.90: a profile photo goes on to the hub through a spoke
                     to = 20
                 elif path0.startswith("/api/avatar/"):   # 0.21.90: a spoke may fetch the photo from the hub first
@@ -3737,6 +3739,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                     code = r.status
                     ctype = r.headers.get("Content-Type") if r.headers else None   # 0.21.84: a library still is image/jpeg
                     ccache = r.headers.get("Cache-Control") if r.headers else None   # 0.21.90: a photo of one version keeps
+                    cdisp = r.headers.get("Content-Disposition") if r.headers else None   # 0.21.96: a meeting's .ics names its file
             except urllib.error.HTTPError as e:
                 data = e.read(); code = e.code
                 retry_after = e.headers.get("Retry-After") if e.headers else None   # 0.10.0: lockouts travel through
@@ -3744,7 +3747,11 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 return self._json_cors(503, {"error": "room-code service unreachable: %s" % e})   # 0.20.0: 503, never 502 (Cloudflare swaps 502s)
             self.send_response(code)
             _ct = locals().get("ctype")
-            self.send_header("Content-Type", _ct if (code == 200 and (str(_ct or "").startswith("image/") or str(_ct or "") == "application/octet-stream")) else "application/json")   # 0.21.88: + an attachment's ciphertext
+            self.send_header("Content-Type", _ct if (code == 200 and (str(_ct or "").startswith("image/") or str(_ct or "") == "application/octet-stream"
+                                                                      or str(_ct or "").startswith("text/calendar"))) else "application/json")   # 0.21.88: + an attachment's ciphertext; 0.21.96: + a meeting's .ics
+            _cd = locals().get("cdisp")
+            if code == 200 and _cd and str(_ct or "").startswith("text/calendar"):
+                self.send_header("Content-Disposition", _cd)   # 0.21.96
             self.send_header("Content-Length", str(len(data)))
             _cc = locals().get("ccache")
             _p0 = self.path.split("?", 1)[0]
@@ -4331,6 +4338,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                          "/api/access",                                       # 0.21.89: Ask for access (ask, status, cancel, answer)
                          "/api/msg", "/api/msg/file",                         # 0.21.88: private messages (+ an attachment's ciphertext)
                          "/api/templates", "/api/templates/fed", "/api/templates/deck",   # 0.21.92: meeting templates (+ their decks)
+                         "/api/meetings",                                     # 0.21.96: scheduled meetings
                          "/api/rcx", "/api/rcx/poll", "/api/rcx/claim", "/api/rcx/end", "/api/rcx/fed",   # 0.21.83 (D): unattended remote control
                          "/api/library", "/api/library/token", "/api/library/admin",   # 0.21.84: the stream library
                          "/api/xshare"):                                      # 0.21.41: list a stream in other rooms
@@ -5250,6 +5258,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if path == "/api/msg/file":                                         # 0.21.88: a message attachment's ciphertext
                 return self._auth_proxy("GET")
             if path == "/api/templates/deck":                                   # 0.21.92: a template deck's file (a read grant)
+                return self._auth_proxy("GET")
+            if path == "/api/meetings/ics":                                     # 0.21.96: a meeting's calendar link (its key is the capability)
                 return self._auth_proxy("GET")
             if path.startswith("/api/avatar/"):                                 # 0.21.90: a person's profile photo (the hub's copy)
                 return self._avatar_get()

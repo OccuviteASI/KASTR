@@ -1373,6 +1373,21 @@ def _room_code_ok(rec, code):
         return False
 
 
+def boxout_refusal(slug, host, p, box_guest):
+    """0.21.96 box-out: why a boxed machine's member mint for `slug` is refused ("" = it may: its own home room, its own My
+    room by its personal code)."""
+    s = str(slug or "")
+    if s.startswith("box-") and not box_guest:
+        return ""
+    if is_personal(s) and p.get("invite") in (None, "") and p.get("admit") in (None, "") and not p.get("meet"):
+        return ""
+    return BOXOUT_REFUSED
+
+
+BOXOUT_REFUSED = ("this relay / camera box machine stays in No room or its My room -- its cameras show in rooms through "
+                  "Show in rooms")
+
+
 def is_personal(slug):
     """0.21.75: a personal room's name (me-<12 hex>)."""
     return bool(PERSONAL_RE.match(str(slug or "")))
@@ -7510,6 +7525,16 @@ class AuthService:
                     "member": _mint(self.key, {"root": "", "get": slug, "put": ["~presrec/" + slug], "iat": now_pr, "exp": exp_pr}),
                     "registry": _mint(self.key, {"root": "", "put": "~presrec/" + slug + "/r", "iat": now_pr, "exp": exp_pr})}}, 200
         # 0.21.92 H: end
+        # 0.21.96 BOX-OUT (Kenton: "For Relays/Camera boxes, I would like them to not be able to directly connect to rooms, they
+        # connect to their 'My room' or no room at all"): a camera box's / relay machine's OWN page says `boxed` on its room
+        # mints -- it gets its own home room (box-<its host>) and its own My room (the personal code; never a guest's invite,
+        # grant or meeting pass) and nothing else. The box server's listing tokens (Show in rooms: kastr_rtsp.mint_member) and the
+        # page's (xsTokenFor) never send it, so a box's cameras keep showing in any room. The flag is the page's own word -- there
+        # is no machine identity before 0.22 -- so this backs up the page and the box's own server; it is not a wall.
+        if p.get("boxed"):
+            why_bx = boxout_refusal(slug, host, p, box_guest)
+            if why_bx:
+                return {"ok": False, "boxed": True, "error": why_bx}, 403
         # 0.21.92 I: remove / ban -- the person key the page sends (`op`) is matched too; the reply keeps 0.17.0's error text
         # (older pages match it) and adds `ban` for "You're banned from <room> until <time>"
         ban_op = str(p.get("op") or "").strip().lower()

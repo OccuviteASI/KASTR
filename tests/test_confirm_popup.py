@@ -32,7 +32,7 @@ class ConfirmPopup(unittest.TestCase):
 
     def test_room_change_asks_in_the_popup_with_the_code(self):
         p = _page()
-        body = p[p.index("  async function sbCardClick(card, rec) {"):p.index("  async function sbCardClick(card, rec) {") + 2600]
+        body = p[p.index("  async function sbCardClick(card, rec) {"):p.index("  async function sbCardClick(card, rec) {") + 2800]   # 0.21.96: + the box-out line
         self.assertIn("const needCode = !!rec.locked;", body)
         self.assertIn("await xsTokenFor(rec.slug, v)", body)
         self.assertIn('detail: "Your microphone will be muted and your camera turned off."', body)

@@ -443,6 +443,46 @@ MODES = ("full", "viewer", "publisher", "relay", "publisher-relay")
 MODE = "full"
 
 
+# ---- 0.21.96 BOX-OUT (Kenton, 2026-10-30: "For Relays/Camera boxes, I would like them to not be able to directly connect to
+# rooms, they connect to their 'My room' or no room at all, and their shares just go to the library or whatever rooms they tell
+# them to."). WHICH machines: this KASTR is a camera box (mode publisher / publisher-relay: why "box"), or it runs the relay
+# itself -- mode relay, its relay running now, or relay autostart on (relay-autostart.json, or kastr.ini relay_autostart = true):
+# why "relay" (kastr.hosts_relay's test, the 0.21.85 "relay machine"). A viewer display (mode viewer) never is: it exists to
+# watch rooms. A person's everyday KASTR that runs no relay never is. Only the machine's OWN page is told (/api/instance to a
+# local caller): web clients of a relay host, its presentation recorder (Host presrec.localhost) and remote pages never are.
+BOXOUT_LOG = []          # what box-out did here (migrations, carried cameras, refusals) -- /api/diag `_boxout`
+BOXOUT_LOG_MAX = 40
+
+
+def boxout_state(relay=None):
+    """-> {"on": bool, "why": "box" | "relay" | ""}."""
+    if MODE in ("publisher", "publisher-relay"):
+        return {"on": True, "why": "box"}
+    if MODE == "viewer":
+        return {"on": False, "why": ""}
+    if MODE == "relay":
+        return {"on": True, "why": "relay"}
+    try:
+        if relay is not None and relay.running():
+            return {"on": True, "why": "relay"}
+    except Exception:
+        pass
+    try:
+        if relay is not None and relay.autostart_config().get("enabled"):
+            return {"on": True, "why": "relay"}
+    except Exception:
+        pass
+    if str(ini_get("relay_autostart") or "").strip().lower() in ("1", "true", "yes"):
+        return {"on": True, "why": "relay"}
+    return {"on": False, "why": ""}
+
+
+def boxout_note(text):
+    """One line of what box-out did (newest last) -- /api/diag `_boxout.log`."""
+    BOXOUT_LOG.append({"at": int(time.time()), "text": str(text)[:300]})
+    del BOXOUT_LOG[:-BOXOUT_LOG_MAX]
+
+
 def mode_state():
     """kastr.ini's operating mode (0.12.0; 0.8.3's relay-only flag generalized).
     `mode` is the ini value normalized to MODES ("full" when absent/unknown),
@@ -2307,6 +2347,7 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
             if not self._local():
                 return self._deny("diagnostics")   # 0.17.0
             out = dict(diag_ref)
+            out["_boxout"] = dict(boxout_state(relay_srv), log=list(BOXOUT_LOG))   # 0.21.96: box-out -- this machine, what it moved
             out["_studiofx"] = studiofx_state()   # 0.21.94: Windows Studio Effects blur (cameras that offer it, held or not)
             body = kastr_secret.mask(json.dumps(out, indent=1, default=str)).encode()   # 0.21.92: no code or token
             self.send_response(200)
@@ -2512,6 +2553,8 @@ def make_handler(root, coep=COEP_MODES[0], relay=DEFAULT_RELAY, quiet=False,
                 "https": HTTPS_INFO.get("port"),
                 "hubWeb": {h: {"web": r.get("web"), "https": r.get("https")} for h, r in HUB_WEB.items()},
             }
+            if local:   # 0.21.96: box-out -- only this machine's own page (never a web client, never the presentation recorder)
+                d["boxout"] = boxout_state(relay_srv)
             if not local:
                 for k in ("pid", "swept", "operator", "updateCheck", "aliveAge", "ffmpeg", "viewing", "hubWeb", "platform",
                           "adminMoved"):   # 0.21.92: the room an admin moved this machine to
@@ -5812,6 +5855,9 @@ def make_server(root, host="127.0.0.1", port=8000, coep=COEP_MODES[0],
         # 0.21.85 (Kenton: a relay / hub machine's shares are listed in the stream library automatically): the bridge asks
         # whether THIS machine runs the relay -- its shares (native and the page's own) are then listed by default
         bridge.relay_here = lambda rs=relay_srv: bool(rs.running())
+    if bridge is not None:
+        bridge.boxout = lambda rs=relay_srv: bool(boxout_state(rs)["on"])   # 0.21.96: box-out (the box server's own checks)
+        bridge.boxout_note = boxout_note
     if relay_srv is not None and MDNS_ADV[0] is None:   # 0.21.22: discovery-only mDNS advertisement of this relay
         try:
             import kastr_mdns

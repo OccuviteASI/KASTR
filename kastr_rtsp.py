@@ -164,6 +164,73 @@ def is_home_room(slug):
     return str(slug or "").startswith(HOME_PREFIX)
 
 
+# ---- 0.21.96 BOX-OUT (Kenton, 2026-10-30: "For Relays/Camera boxes, I would like them to not be able to directly connect to
+# rooms, they connect to their 'My room' or no room at all, and their shares just go to the library or whatever rooms they tell
+# them to."): a boxed machine (kastr_serve.boxout_state -- a camera box, or a KASTR that runs the relay itself) sits in its hidden
+# home room (box-<host>) or its own My room. A box that sat in a real room moves out ONCE (boxout_migrate, at the launch of the
+# new version) and keeps every camera LISTED back into that room (Show in rooms), its old path kept as a library alias.
+BOXOUT_PERSONAL_RE = re.compile(r"^me-[0-9a-f]{12}$")
+BOXOUT_LIB = "lib"   # (= LIB_ROOT, defined further down)
+BOXOUT_REFUSED = ("this relay / camera box machine stays in No room or its My room -- its cameras show in rooms through "
+                  "Show in rooms")
+
+
+def boxout_real_room(slug):
+    """0.21.96: a room a boxed machine may not sit in -- anything but its home room (box-*), a My room (me-*), the library
+    root or no room at all. The Lobby (main) counts: a boxed machine never waits there."""
+    s = str(slug or "").strip().lower()
+    return bool(s) and not is_home_room(s) and not BOXOUT_PERSONAL_RE.match(s) and s != BOXOUT_LIB
+
+
+def boxout_migrate(doc, host, now=None, why="box"):
+    """0.21.96: rtsp-feeds.json of a boxed machine that still names a real room R -> its home room, once. Each of the
+    machine's OWN cameras there (a web client's camera in its own room is left alone) moves R/<rest> -> box-<host>/<rest>,
+    shows in R again (xs; R's code kept with it for a locked room) and keeps R/<rest> as a library alias (libAka: the hub
+    rewrites every board naming it, pages their own grids and pins). -> (doc, note | None); `doc` is changed in place."""
+    if not isinstance(doc, dict):
+        return doc, None
+    room = str(doc.get("room") or "").strip().lower()
+    if not boxout_real_room(room) or not host:
+        return doc, None
+    home = home_room(host)
+    now = int(time.time() if now is None else now)
+    code = str(doc.get("roomCode") or "")
+    listed = room != "main"   # (nothing is ever published in the Lobby -- nothing to list back there)
+    moved = 0
+    for rec in doc.get("feeds") or []:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("room") and str(rec.get("room")) != room:
+            continue   # a web client's camera in its own room (0.21.2)
+        b = str(rec.get("broadcast") or "")
+        if b.startswith(room + "/"):
+            rec["broadcast"] = home + b[len(room):]
+            if listed:
+                aka = rec.get("libAka") if isinstance(rec.get("libAka"), dict) else {}
+                aka.setdefault(b, now)
+                rec["libAka"] = aka
+            moved += 1
+        rec.pop("room", None)
+        if not listed:
+            continue
+        xs = [str(r) for r in (rec.get("xs") or []) if _XS_ROOM_RE.match(str(r)) and not is_home_room(r) and str(r) != room]
+        if len(xs) >= XS_ROOMS_MAX:
+            xs = xs[:XS_ROOMS_MAX - 1]
+        rec["xs"] = xs + [room]
+        if rec.get("xsAuto") == room:
+            rec.pop("xsAuto", None)   # (the library's own listing-back becomes a kept one: R stays if the library goes)
+        if code:
+            codes = rec.get("xsCodes") if isinstance(rec.get("xsCodes"), dict) else {}
+            codes.setdefault(room, code)
+            rec["xsCodes"] = codes
+    doc["room"] = home
+    doc["roomCode"] = ""
+    doc["boxout"] = {"from": room, "to": home, "at": now, "why": str(why or "box"), "feeds": moved}
+    note = ("box-out: this %s left room %s for No room (%s) -- %d camera(s) moved, each still shown in %s"
+            % ("relay machine" if why == "relay" else "camera box", room, home, moved, room if listed else "no room"))
+    return doc, note
+
+
 def _xs_fields(feed):
     """0.21.75: a feed's rooms (+ the codes of locked ones) for its rtsp-feeds.json record -- {} when it has none."""
     xs = getattr(feed, "xs", None)
@@ -3570,6 +3637,7 @@ class Bridge:
         # lib/<host>/<op>/<leaf>.hang on a library publisher token instead (/api/rtsp/list says which: publish.broadcast,
         # publish.library). The relay's word is the one heard last (the library loop and restore ask it; never inline here).
         base = self._lib_base(feed, broadcast)
+        self._boxout_carry(feed, base)   # 0.21.96: box-out -- a camera leaving a real room keeps showing there
         lib_on = False
         if self._lib_effective(feed, base, relay, fetch=False):
             lurl = self._lib_url(relay)
@@ -4595,6 +4663,53 @@ class Bridge:
         if auto:
             feed.xs = [r for r in (getattr(feed, "xs", None) or []) if r != auto]
             feed.xs_auto = None
+
+    def _boxout_carry(self, feed, base, now=None):
+        """0.21.96 box-out: on a boxed machine (self.boxout(), set by kastr_serve) a camera of its own that moves from a real
+        room R to its home room or My room (the page left R: a relay started under a page in a room, an old page) shows in
+        R again (xs, R's code kept) and keeps its R path as a library alias -- viewers in R see no change."""
+        fn = getattr(self, "boxout", None)
+        try:
+            if not callable(fn) or not fn():
+                return
+        except Exception:
+            return
+        old = str(getattr(feed, "base_broadcast", None) or "")
+        old_room, new_room = old.split("/", 1)[0], str(base or "").split("/", 1)[0]
+        if not old or old_room == new_room or not boxout_real_room(old_room) or old_room == "main" or boxout_real_room(new_room):
+            return
+        if getattr(feed, "room", ""):
+            return   # a web client's camera (0.21.2: only those carry a room of their own)
+        now = int(time.time() if now is None else now)
+        xs = [str(r) for r in (getattr(feed, "xs", None) or []) if str(r) != new_room]
+        if old_room not in xs and len(xs) < XS_ROOMS_MAX:
+            xs = xs + [old_room]
+            last = getattr(self, "_last_session", None) or {}
+            if last.get("room") == old_room and last.get("roomCode"):
+                codes = dict(getattr(feed, "xs_codes", None) or {})
+                codes.setdefault(old_room, str(last["roomCode"]))
+                feed.xs_codes = codes
+        feed.xs = xs
+        aka = getattr(feed, "lib_aka", None)
+        if not isinstance(aka, dict):
+            aka = feed.lib_aka = {}
+        aka.setdefault(old, now)
+        if getattr(feed, "xs_auto", None) == old_room:
+            feed.xs_auto = None
+        msg = "rtsp: box-out -- %s left room %s for %s; it still shows in %s (Show in rooms)" % (old, old_room, new_room, old_room)
+        self.log(msg)
+        try:
+            note = getattr(self, "boxout_note", None)
+            if callable(note):
+                note(msg)
+        except Exception:
+            pass
+        try:
+            if self._xs_wanted():
+                self._xs_ensure()
+            self.xs_poke()
+        except Exception:
+            pass
 
     def _lib_after_publish(self, feed, old_b, old_relay, broadcast, lib_on, base):
         """_publish's bookkeeping: a camera that left the library is stopped there (with where it went); one that joined is noted."""
@@ -5797,6 +5912,17 @@ def handle_api(handler, bridge, path):
         except Exception:
             reply({"error": "bad json"}, 400)
             return True
+        bo = getattr(bridge, "boxout", None)   # 0.21.96: box-out -- this machine's own page never puts it in a real room
+        try:
+            boxed = bool(callable(bo) and bo())
+        except Exception:
+            boxed = False
+        if boxed and path in ("/api/rtsp/publish", "/api/rtsp/persist"):
+            want = str(payload.get("broadcast") or "") if path == "/api/rtsp/publish" else str(payload.get("room") or "")
+            want = want.strip().lower().split("/", 1)[0]
+            if boxout_real_room(want):
+                reply({"error": BOXOUT_REFUSED, "boxed": True}, 403)
+                return True
         try:
             if path == "/api/rtsp/publish":
                 had_pubs = bool(getattr(bridge, "_pubs", None))   # 0.21.16: the first camera record -> the hub's Cameras column
@@ -5869,6 +5995,8 @@ def handle_api(handler, bridge, path):
                 text = re.sub(r"\s+", " ", str(payload.get("text") or "")).strip()[:400]   # 0.21.93: was 240 -- a video-stall line carries its clocks + caption
                 if text:
                     bridge.log("page: " + text)
+                    if text.startswith("box-out:") and callable(getattr(bridge, "boxout_note", None)):   # 0.21.96: + /api/diag _boxout
+                        bridge.boxout_note("page: " + text)
                 reply({"ok": bool(text)})
             else:
                 why = str(payload.get("why") or "api").strip()[:32] or "api"   # 0.13.1

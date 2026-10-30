@@ -3298,6 +3298,35 @@ KEEPER_BUSY = [False]       # supervise() ignores the browser exiting while the 
 KEEPER_PROC = [None]        # the window the keeper opened -- supervise() follows it
 
 
+def feeds_boxout(path, doc, bridge, relay=None, now=None):
+    """0.21.96 BOX-OUT (Kenton: boxes "connect to their 'My room' or no room at all" -- "Boxes sitting in a real room MOVE OUT
+    ON UPDATE and KEEP LISTING"): the first launch of this version on a camera box / relay machine whose rtsp-feeds.json still
+    names a real room moves it to its home room (kastr_rtsp.boxout_migrate: every camera listed back into that room, its old
+    path kept as a library alias), writes the file back sealed and logs it (launch.log + /api/diag _boxout). -> the doc to use."""
+    try:
+        state = kastr_serve.boxout_state(relay)
+    except Exception:
+        state = {"on": False}
+    if not state.get("on"):
+        return doc
+    host = getattr(bridge, "host_slug", None) or ""
+    doc, msg = kastr_serve.kastr_rtsp.boxout_migrate(doc, host, now=now, why=state.get("why") or "box")
+    if not msg:
+        return doc
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(kastr_secret.seal_doc(path, doc), f, indent=1)
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except Exception as e:
+        msg += " (not saved: %s -- tried again at the next launch)" % e
+    note(msg)
+    kastr_serve.boxout_note(msg)
+    return doc
+
+
 def box_room():
     """The room this box belongs in (rtsp-feeds.json, written when it joins; Leave writes it empty)."""
     try:
@@ -4228,6 +4257,7 @@ def main():
             if not isinstance(doc, dict):
                 return
             doc = kastr_secret.open_doc(path, doc)   # 0.21.92: the codes are kept sealed
+            doc = feeds_boxout(path, doc, bridge, getattr(server, "relay", None))   # 0.21.96: box-out -- a box / relay machine in a real room moves out, once
             room = str(doc.get("room") or "").strip().lower()
             feeds = [x for x in (doc.get("feeds") or []) if isinstance(x, dict) and x.get("url") and x.get("keep", True)]
             if doc.get("suspended") is True:   # 0.21.16: the switch survives the relaunch -- records come back, nothing starts

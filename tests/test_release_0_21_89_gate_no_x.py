@@ -26,8 +26,8 @@ class GateHeadingNamesThePickedRoom(unittest.TestCase):
         s = page()
         self.assertIn("function gateHeadingSlug(cur, joined)", s)
         self.assertIn('sel !== "__new" && lastChannelList.some((r) => r.slug === sel)) ? sel : cur', s)
-        self.assertIn("roomTitle(gateHeadingSlug(c, joined))", s)
-        self.assertIn('roomTitle(gateHeadingSlug(readChannel(), joinState === "joined"))', s)
+        self.assertIn("gateHeadingTitle(gateHeadingSlug(c, joined))", s)   # 0.21.96: gateHeadingTitle = roomTitle, "No room" for a box's home
+        self.assertIn('gateHeadingTitle(gateHeadingSlug(readChannel(), joinState === "joined"))', s)
 
 
 if __name__ == "__main__":

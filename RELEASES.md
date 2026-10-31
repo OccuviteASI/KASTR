@@ -2,6 +2,46 @@
 
 What changed in each build, newest first.
 
+## v0.21.96 — Scheduled meetings; locked shares; camera boxes and relays stay out of rooms; RTSP cameras over UDP
+
+**Scheduled meetings (Kenton: "add scheduled meetings to the next update").**
+- More > Meetings… schedules a one-time, daily or weekly meeting. Times are kept in the organizer's time zone, so a 15:00 meeting stays at 15:00 across a clock change.
+- Each meeting series has its own hidden room (chat and files kept between meetings). It is never in the rooms rail, and only the people invited (and guests with the meeting's link, when that is on) can get in. It opens 10 minutes before the start and closes once it empties after the end.
+- The Meetings list shows only meetings you are invited to or organize: Live now, Coming up and Cancelled. A reminder comes 5 minutes before and a Join prompt at the start.
+- Details: Join, Download .ics, Copy calendar link, Copy guest link, Edit or Cancel (this one or the whole series), Delete and End meeting.
+- "Requires the host to join" (off by default): when on, invitees wait in a lobby until the organizer or a presenter arrives. Guest links are off by default.
+- A meeting can use a template; the first person in applies it.
+- Who can schedule: anyone with a My room (in the meeting's own room), room admins into their rooms, fleet admins into any room.
+- Not yet: real Outlook invites (they come with sign-in in 0.22); people in a meeting don't show their room in Everyone online.
+
+**Locked shares (Kenton: "I want the ability to lock a share in the shared sources, and when stopping sharing, they stay there and can be started again. Per share option").**
+- Each share has a Lock switch, on its row in Share > Sources and in its own ▾ menu. It is off by default.
+- Stopping a locked share keeps it in your Share list as "stopped", with Start and ✕. In the stream library it shows as "Not streaming".
+- Start brings it back under the same name, so viewers' tiles, pins, spotlights, grids and library entries reconnect.
+- Locked shares survive a KASTR restart as stopped rows. Nothing starts by itself, and only you can start your own shares.
+- Screen, window and tab shares (browser and native) and media files can be locked. Cameras, RTSP feeds, grids and presentations can't (cameras already have Keep after restart and On air).
+- Start on a native window share starts at once only if that exact window is still open; otherwise Share opens and asks what to share. A media file asks for the file again after a restart.
+
+**Camera boxes and relays stay out of rooms (Kenton: "For Relays/Camera boxes, I would like them to not be able to directly connect to rooms, they connect to their 'My room' or no room at all, and their shares just go to the library or whatever rooms they tell them to").**
+- Camera boxes (publisher modes) and always-on relays (relay mode, or the relay starting with the machine) can only be in No room or their own My room. Their cameras go to the library and to the rooms picked with Show in rooms.
+- A relay started by hand on someone's laptop doesn't count: that KASTR is still a person and can join rooms.
+- Boxes already in a real room move out on this update by themselves and keep listing their cameras back into that room, so grids, pins and composites keep working.
+- Viewers on 0.21.96 see the moved camera take over its old tile in place, spotlight kept. Viewers on older KASTR see the camera come back as a new tile.
+- The relay refuses room tokens to a boxed machine except for its own rooms. This isn't a security wall yet: machines get their own identity with sign-in in 0.22.
+
+**RTSP cameras over UDP (Kenton: "add a UDP fallback to the next version").**
+- Each RTSP camera has a Transport choice: Auto (the default), TCP or UDP. Auto tries TCP first and moves to UDP if the camera refuses TCP or gives no picture over it.
+- The camera row shows lost packets and dropped frames for the last minute and since the start, so a real-world UDP test shows how much it drops. /api/diag has the same numbers.
+- UDP cameras are always re-encoded, which hides most losses as a softer picture instead of a broken one.
+- Cameras sending MJPEG over RTSP now work (the Convoy IP1910IR's default).
+- The transport is saved per camera, sealed like the camera address.
+
+**Grid builder library filters (Kenton: "sometimes I only want online").** The library list in the grid builder has Online (the default), Live and All, type chips, a site filter and an "N of M" count. Your choice is kept.
+
+**Selecting text no longer closes things (Kenton: "in an entry field I can't click and drag, it closes the tab when I do that").** Dragging to select text in a field and letting go outside it no longer closes the panel or dialog. A real click outside still does.
+
+**Switches in menus.** Menu options that were tick marks (In the stream library, Lock cells, Show names, Full quality, Let everyone point, Show my clicks) are now switches.
+
 ## v0.21.95 — Background noise removal without the crackle; shared media in lip sync; library streams spotlight together
 
 **Background noise removal no longer crackles (Kenton: "I'm still getting a crackling when using the background noise removal").**
